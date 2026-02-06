@@ -378,7 +378,11 @@ export class Engine {
     }
   }
 
+  private chatRunning = false;
   async chatTick() {
+    if (this.chatRunning) return;
+    this.chatRunning = true;
+    try {
     const { docs, repo } = this.ctx;
     const tracked = repo.listDocs();
     for (const d of tracked) {
@@ -426,12 +430,14 @@ export class Engine {
         });
       }
     }
+    } finally { this.chatRunning = false; }
   }
 
   /**
    * Live Portfolio Dashboard — queries balances from all chains and updates the BALANCES
    * and OPEN_ORDERS tables in the Google Doc. Runs every BALANCE_POLL_INTERVAL_MS.
    */
+
   async balancesTick() {
     if (this.balancesRunning) return;
     this.balancesRunning = true;

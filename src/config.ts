@@ -19,7 +19,7 @@ const EnvSchema = z.object({
   DOCWALLET_MASTER_KEY: z.string().min(1),
   HTTP_PORT: z.string().optional().default("8787").pipe(NumberString),
   PUBLIC_BASE_URL: z.string().optional().transform((v) => (v?.trim() ? v.trim().replace(/\/+$/g, "") : undefined)),
-  POLL_INTERVAL_MS: z.string().optional().default("5000").pipe(NumberString),
+  POLL_INTERVAL_MS: z.string().optional().default("15000").pipe(NumberString),
   DISCOVERY_INTERVAL_MS: z.string().optional().default("60000").pipe(NumberString),
   DOCWALLET_DOC_ID: z.string().optional().transform((v) => (v?.trim() ? v.trim() : undefined)),
   DOCWALLET_DISCOVER_ALL: z.string().optional().default("0").pipe(BoolString),

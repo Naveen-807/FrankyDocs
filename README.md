@@ -1,5 +1,7 @@
 # FrankyDocs (DocWallet)
 
+**HackMoney 2026** — Arc · Sui DeepBook · Yellow
+
 One-line pitch: FrankyDocs turns a Google Doc into a multi-chain DeFi treasury. Proposers need no wallet; approvers sign once via MetaMask, WalletConnect, or Yellow delegated keys. Approvals can be gasless using Yellow delegated session keys.
 
 Note: the codebase uses the internal name "DocWallet" in env vars, database schema, and template anchors (for example `DOCWALLET_*` and `docwallet.policy`).
@@ -47,6 +49,8 @@ flowchart TB
 - `docs/commands.md`
 - `docs/execution-plan.md`
 - `docs/demo-script.md`
+- `docs/how-to-maximize-winning.md` — HackMoney 2026 checklist
+- `docs/submission-one-pager.md` — copy-paste for submission form
 
 ## Roadmap (high level)
 - Richer risk engine with portfolio heuristics
@@ -59,3 +63,9 @@ flowchart TB
 - Run: `npm run dev`
 - Sanity check: `npm run doctor`
 - Tests: `npm run test`
+
+## Judge / hackathon setup (quick)
+1. Copy `.env.example` to `.env` and set `GOOGLE_SERVICE_ACCOUNT_JSON`, `DOCWALLET_MASTER_KEY`; add Arc/Sui/Circle keys if you want full flows.
+2. `npm install && npm run dev`
+3. Create a Google Doc titled `[DocWallet] <name>`, share it with the service account email (Editor).
+4. Wait for the template to appear, then run `DW /setup` in the Commands table. See `docs/execution-plan.md` and `docs/demo-script.md` for the full flow.

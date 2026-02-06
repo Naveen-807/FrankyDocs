@@ -83,10 +83,12 @@ async function main() {
   await engine.discoveryTick();
   await engine.pollTick();
 
+  console.log(`[engine] started — polling every ${config.POLL_INTERVAL_MS}ms, ${repo.listDocs().length} tracked docs`);
+
   setInterval(() => engine.discoveryTick().catch((e) => console.error("discoveryTick", e)), config.DISCOVERY_INTERVAL_MS);
   setInterval(() => engine.pollTick().catch((e) => console.error("pollTick", e)), config.POLL_INTERVAL_MS);
-  setInterval(() => engine.executorTick().catch((e) => console.error("executorTick", e)), 1500);
-  setInterval(() => engine.chatTick().catch((e) => console.error("chatTick", e)), Math.max(5000, config.POLL_INTERVAL_MS));
+  setInterval(() => engine.executorTick().catch((e) => console.error("executorTick", e)), 5_000);
+  setInterval(() => engine.chatTick().catch((e) => console.error("chatTick", e)), Math.max(15_000, config.POLL_INTERVAL_MS));
   setInterval(() => engine.balancesTick().catch((e) => console.error("balancesTick", e)), config.BALANCE_POLL_INTERVAL_MS);
   setInterval(() => engine.schedulerTick().catch((e) => console.error("schedulerTick", e)), config.SCHEDULER_INTERVAL_MS);
 

@@ -32,6 +32,15 @@ export type DocWalletTables = {
   audit: { table: docs_v1.Schema$Table; tableStartIndex: number };
 };
 
+/** Cache of docs whose template has already been ensured this process lifetime. */
+const templateEnsuredDocs = new Set<string>();
+
+/** Force re-check of a doc's template on the next loadDocWalletTables call. */
+export function invalidateTemplateCache(docId?: string) {
+  if (docId) templateEnsuredDocs.delete(docId);
+  else templateEnsuredDocs.clear();
+}
+
 function mustGetTableInfo(doc: docs_v1.Schema$Document, anchor: string) {
   const anchorLoc = findAnchor(doc, anchor);
   if (!anchorLoc) throw new Error(`Missing anchor: ${anchor}`);
@@ -42,7 +51,10 @@ function mustGetTableInfo(doc: docs_v1.Schema$Document, anchor: string) {
 
 export async function loadDocWalletTables(params: { docs: docs_v1.Docs; docId: string }): Promise<DocWalletTables> {
   const { docs, docId } = params;
-  await ensureDocWalletTemplate({ docs, docId });
+  if (!templateEnsuredDocs.has(docId)) {
+    await ensureDocWalletTemplate({ docs, docId });
+    templateEnsuredDocs.add(docId);
+  }
   const doc = await getDoc(docs, docId);
 
   const cfg = mustGetTableInfo(doc, DOCWALLET_CONFIG_ANCHOR);
