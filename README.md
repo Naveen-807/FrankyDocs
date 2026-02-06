@@ -1,4 +1,4 @@
-# DocWallet (Track-Winner Scaffold)
+# DocWallet 
 
 Local agent that turns a Google Doc into a wallet + trading terminal:
 - Drive auto-discovers Docs shared with the “agent email”
