@@ -95,6 +95,9 @@ async function main() {
   // Autonomous agent decision engine — monitors balances, gas, stale commands, thresholds
   setInterval(() => engine.agentDecisionTick().catch((e) => console.error("agentDecisionTick", e)), 60_000);
 
+  // Price oracle + conditional order monitor (stop-loss, take-profit)
+  setInterval(() => engine.priceTick().catch((e) => console.error("priceTick", e)), 30_000);
+
   process.on("SIGINT", () => {
     repo.close();
     process.exit(0);

@@ -553,6 +553,108 @@ describe("parseCommand — every command type", () => {
   });
 
   // ============================================================
+  // STOP_LOSS
+  // ============================================================
+  describe("STOP_LOSS", () => {
+    it("parses DW STOP_LOSS SUI 100 @ 0.80", () => {
+      const r = parseCommand("DW STOP_LOSS SUI 100 @ 0.80");
+      expect(r).toEqual({ ok: true, value: { type: "STOP_LOSS", base: "SUI", quote: "USDC", qty: 100, triggerPrice: 0.8 } });
+    });
+    it("parses case-insensitively", () => {
+      const r = parseCommand("dw stop_loss sui 50 @ 0.75");
+      expect(r).toEqual({ ok: true, value: { type: "STOP_LOSS", base: "SUI", quote: "USDC", qty: 50, triggerPrice: 0.75 } });
+    });
+    it("rejects zero qty", () => {
+      expect(parseCommand("DW STOP_LOSS SUI 0 @ 0.80").ok).toBe(false);
+    });
+    it("rejects negative price", () => {
+      expect(parseCommand("DW STOP_LOSS SUI 100 @ -1").ok).toBe(false);
+    });
+    it("rejects missing @", () => {
+      expect(parseCommand("DW STOP_LOSS SUI 100 0.80").ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // TAKE_PROFIT
+  // ============================================================
+  describe("TAKE_PROFIT", () => {
+    it("parses DW TAKE_PROFIT SUI 200 @ 2.50", () => {
+      const r = parseCommand("DW TAKE_PROFIT SUI 200 @ 2.50");
+      expect(r).toEqual({ ok: true, value: { type: "TAKE_PROFIT", base: "SUI", quote: "USDC", qty: 200, triggerPrice: 2.5 } });
+    });
+    it("parses case-insensitively", () => {
+      const r = parseCommand("dw take_profit sui 100 @ 3.00");
+      expect(r).toEqual({ ok: true, value: { type: "TAKE_PROFIT", base: "SUI", quote: "USDC", qty: 100, triggerPrice: 3 } });
+    });
+    it("rejects zero price", () => {
+      expect(parseCommand("DW TAKE_PROFIT SUI 100 @ 0").ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // SWEEP_YIELD
+  // ============================================================
+  describe("SWEEP_YIELD", () => {
+    it("parses DW SWEEP_YIELD", () => {
+      const r = parseCommand("DW SWEEP_YIELD");
+      expect(r).toEqual({ ok: true, value: { type: "SWEEP_YIELD" } });
+    });
+    it("parses DW SWEEP alias", () => {
+      const r = parseCommand("DW SWEEP");
+      expect(r).toEqual({ ok: true, value: { type: "SWEEP_YIELD" } });
+    });
+    it("case-insensitive", () => {
+      const r = parseCommand("dw sweep_yield");
+      expect(r).toEqual({ ok: true, value: { type: "SWEEP_YIELD" } });
+    });
+  });
+
+  // ============================================================
+  // TRADE_HISTORY
+  // ============================================================
+  describe("TRADE_HISTORY", () => {
+    it("parses DW TRADE_HISTORY", () => {
+      const r = parseCommand("DW TRADE_HISTORY");
+      expect(r).toEqual({ ok: true, value: { type: "TRADE_HISTORY" } });
+    });
+    it("parses DW TRADES alias", () => {
+      const r = parseCommand("DW TRADES");
+      expect(r).toEqual({ ok: true, value: { type: "TRADE_HISTORY" } });
+    });
+    it("parses DW PNL alias", () => {
+      const r = parseCommand("DW PNL");
+      expect(r).toEqual({ ok: true, value: { type: "TRADE_HISTORY" } });
+    });
+    it("parses DW P&L alias", () => {
+      const r = parseCommand("DW P&L");
+      expect(r).toEqual({ ok: true, value: { type: "TRADE_HISTORY" } });
+    });
+    it("case-insensitive", () => {
+      const r = parseCommand("dw trades");
+      expect(r).toEqual({ ok: true, value: { type: "TRADE_HISTORY" } });
+    });
+  });
+
+  // ============================================================
+  // PRICE
+  // ============================================================
+  describe("PRICE", () => {
+    it("parses DW PRICE", () => {
+      const r = parseCommand("DW PRICE");
+      expect(r).toEqual({ ok: true, value: { type: "PRICE" } });
+    });
+    it("parses DW PRICES alias", () => {
+      const r = parseCommand("DW PRICES");
+      expect(r).toEqual({ ok: true, value: { type: "PRICE" } });
+    });
+    it("case-insensitive", () => {
+      const r = parseCommand("dw price");
+      expect(r).toEqual({ ok: true, value: { type: "PRICE" } });
+    });
+  });
+
+  // ============================================================
   // EDGE CASES
   // ============================================================
   describe("edge cases", () => {
@@ -665,5 +767,80 @@ describe("tryAutoDetect — natural language shortcuts", () => {
   });
   it("returns null for empty string", () => {
     expect(tryAutoDetect("")).toBe(null);
+  });
+  it("auto-detects 'stop loss 100 SUI at 0.80'", () => {
+    const r = tryAutoDetect("stop loss 100 SUI at 0.80");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "STOP_LOSS") {
+      expect(r.value.base).toBe("SUI");
+      expect(r.value.qty).toBe(100);
+      expect(r.value.triggerPrice).toBe(0.8);
+    }
+  });
+  it("auto-detects 'stop-loss SUI 50 @ 0.75'", () => {
+    const r = tryAutoDetect("stop-loss SUI 50 @ 0.75");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "STOP_LOSS") {
+      expect(r.value.qty).toBe(50);
+      expect(r.value.triggerPrice).toBe(0.75);
+    }
+  });
+  it("auto-detects 'take profit 100 SUI at 2.50'", () => {
+    const r = tryAutoDetect("take profit 100 SUI at 2.50");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "TAKE_PROFIT") {
+      expect(r.value.qty).toBe(100);
+      expect(r.value.triggerPrice).toBe(2.5);
+    }
+  });
+  it("auto-detects 'tp SUI 50 @ 2.50'", () => {
+    const r = tryAutoDetect("tp SUI 50 @ 2.50");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "TAKE_PROFIT") {
+      expect(r.value.qty).toBe(50);
+    }
+  });
+  it("auto-detects 'sweep'", () => {
+    const r = tryAutoDetect("sweep");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("SWEEP_YIELD");
+  });
+  it("auto-detects 'sweep yield'", () => {
+    const r = tryAutoDetect("sweep yield");
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'collect'", () => {
+    const r = tryAutoDetect("collect");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("SWEEP_YIELD");
+  });
+  it("auto-detects 'pnl'", () => {
+    const r = tryAutoDetect("pnl");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("TRADE_HISTORY");
+  });
+  it("auto-detects 'trades'", () => {
+    const r = tryAutoDetect("trades");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("TRADE_HISTORY");
+  });
+  it("auto-detects 'p&l'", () => {
+    const r = tryAutoDetect("p&l");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("TRADE_HISTORY");
+  });
+  it("auto-detects 'trade history'", () => {
+    const r = tryAutoDetect("trade history");
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'price'", () => {
+    const r = tryAutoDetect("price");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("PRICE");
+  });
+  it("auto-detects 'prices'", () => {
+    const r = tryAutoDetect("prices");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("PRICE");
   });
 });

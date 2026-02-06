@@ -491,6 +491,40 @@ export class Engine {
           }
         }
 
+        // --- Portfolio Valuation (USD value using live prices) ---
+        const cachedPrice = repo.getPrice("SUI/USDC");
+        if (cachedPrice && cachedPrice.mid_price > 0) {
+          let totalUsdValue = 0;
+          for (const entry of balanceEntries) {
+            if (entry.location === "Updated") continue;
+            const bal = Number(entry.balance);
+            if (!Number.isFinite(bal) || bal <= 0) continue;
+            if (entry.asset === "SUI") {
+              const usd = bal * cachedPrice.mid_price;
+              totalUsdValue += usd;
+            } else if (entry.asset === "USDC" || entry.asset === "DBUSDC") {
+              totalUsdValue += bal;
+            } else if (entry.asset === "Native") {
+              // Arc native (ETH-equivalent) — approximate as 0 for now
+            }
+          }
+          balanceEntries.push({ location: "Portfolio", asset: "USD Value", balance: `$${totalUsdValue.toFixed(2)}` });
+
+          // Add P&L summary
+          const stats = repo.getTradeStats(docId);
+          if (stats.totalBuyUsdc > 0 || stats.totalSellUsdc > 0) {
+            const pnlSign = stats.netPnl >= 0 ? "+" : "";
+            balanceEntries.push({ location: "Trading", asset: "P&L", balance: `${pnlSign}$${stats.netPnl.toFixed(2)}` });
+          }
+
+          // Active conditional orders
+          const condOrders = repo.listActiveConditionalOrders(docId);
+          if (condOrders.length > 0) {
+            const summary = condOrders.map(o => `${o.type === "STOP_LOSS" ? "SL" : "TP"}@${o.trigger_price}`).join(",");
+            balanceEntries.push({ location: "Watching", asset: `SUI @${cachedPrice.mid_price.toFixed(4)}`, balance: summary });
+          }
+        }
+
         // Timestamp row
         balanceEntries.push({ location: "Updated", asset: "", balance: new Date().toISOString().slice(0, 19) });
 
@@ -578,6 +612,89 @@ export class Engine {
       }
     } finally {
       this.schedulerRunning = false;
+    }
+  }
+
+  // --- Price Oracle Tick ---
+
+  private priceTickRunning = false;
+
+  /**
+   * Fetches live SUI/USDC mid-price from DeepBook orderbook and caches it.
+   * Also monitors conditional orders (stop-loss / take-profit) and triggers them.
+   */
+  async priceTick() {
+    if (this.priceTickRunning) return;
+    this.priceTickRunning = true;
+    try {
+      const { repo, deepbook } = this.ctx;
+      if (!deepbook) return;
+
+      // Fetch mid-price from DeepBook
+      const priceData = await deepbook.getMidPrice({ poolKey: "SUI_DBUSDC" });
+      if (priceData.mid > 0) {
+        repo.upsertPrice("SUI/USDC", priceData.mid, priceData.bid, priceData.ask, "deepbook");
+      }
+
+      // --- Monitor conditional orders (stop-loss / take-profit) ---
+      if (priceData.mid <= 0) return;
+
+      const activeOrders = repo.listActiveConditionalOrders();
+      for (const order of activeOrders) {
+        const shouldTrigger =
+          (order.type === "STOP_LOSS" && priceData.mid <= order.trigger_price) ||
+          (order.type === "TAKE_PROFIT" && priceData.mid >= order.trigger_price);
+
+        if (!shouldTrigger) continue;
+
+        const docId = order.doc_id;
+        const rawCommand = `DW MARKET_SELL SUI ${order.qty}`;
+        const cmdId = generateCmdId(docId, `${order.type}:${order.order_id}`);
+
+        // Auto-execute: insert as APPROVED command
+        repo.upsertCommand({
+          cmd_id: cmdId,
+          doc_id: docId,
+          raw_command: rawCommand,
+          parsed_json: JSON.stringify({ type: "MARKET_SELL", base: "SUI", quote: "USDC", qty: order.qty }),
+          status: "APPROVED",
+          yellow_intent_id: null,
+          sui_tx_digest: null,
+          arc_tx_hash: null,
+          result_text: null,
+          error_text: null
+        });
+
+        repo.triggerConditionalOrder(order.order_id, cmdId);
+        repo.insertAgentActivity(docId, order.type, `${order.type} triggered at ${priceData.mid.toFixed(4)}, sell ${order.qty} SUI -> ${cmdId}`);
+
+        // Write to doc
+        try {
+          await appendCommandRow({
+            docs: this.ctx.docs,
+            docId,
+            id: cmdId,
+            command: `[${order.type}:${order.order_id.slice(0, 12)}] ${rawCommand}`,
+            status: "APPROVED",
+            result: "",
+            error: ""
+          });
+          await appendRecentActivityRow({
+            docs: this.ctx.docs,
+            docId,
+            timestampIso: new Date().toISOString(),
+            type: order.type,
+            details: `Triggered @ ${priceData.mid.toFixed(4)} → sell ${order.qty} SUI`,
+            tx: ""
+          });
+        } catch { /* ignore doc write failure */ }
+
+        console.log(`[price] ${order.type} triggered for ${docId.slice(0, 8)}… @ ${priceData.mid.toFixed(4)} → sell ${order.qty} SUI`);
+      }
+    } catch (err) {
+      console.error("priceTick error:", err);
+    } finally {
+      this.priceTickRunning = false;
     }
   }
 
@@ -874,6 +991,70 @@ export class Engine {
         status = `YELLOW_SESSION=${y.app_session_id} v${y.version} ${y.status}${allocSummary}`;
       }
       return { resultText: `QUORUM=${q} SIGNERS=${signerCount} ${status}` };
+    }
+
+    if (command.type === "PRICE") {
+      const cached = repo.getPrice("SUI/USDC");
+      if (!cached || cached.mid_price <= 0) {
+        // Try live fetch
+        if (deepbook) {
+          const p = await deepbook.getMidPrice({ poolKey: "SUI_DBUSDC" });
+          if (p.mid > 0) {
+            repo.upsertPrice("SUI/USDC", p.mid, p.bid, p.ask, "deepbook");
+            return { resultText: `SUI/USDC MID=${p.mid.toFixed(6)} BID=${p.bid.toFixed(6)} ASK=${p.ask.toFixed(6)} SPREAD=${p.spread.toFixed(2)}%` };
+          }
+        }
+        return { resultText: "SUI/USDC PRICE=UNAVAILABLE (no DeepBook liquidity)" };
+      }
+      const age = Math.floor((Date.now() - cached.updated_at) / 1000);
+      return { resultText: `SUI/USDC MID=${cached.mid_price.toFixed(6)} BID=${cached.bid.toFixed(6)} ASK=${cached.ask.toFixed(6)} AGE=${age}s` };
+    }
+
+    if (command.type === "TRADE_HISTORY") {
+      const stats = repo.getTradeStats(docId);
+      const trades = repo.listTrades(docId, 10);
+      const lines = [
+        `TRADES: buys=${stats.totalBuys.toFixed(2)} SUI ($${stats.totalBuyUsdc.toFixed(2)})`,
+        `sells=${stats.totalSells.toFixed(2)} SUI ($${stats.totalSellUsdc.toFixed(2)})`,
+        `fees=$${stats.totalFees.toFixed(2)}`,
+        `NET_PNL=${stats.netPnl >= 0 ? "+" : ""}$${stats.netPnl.toFixed(2)}`
+      ];
+      if (trades.length > 0) {
+        lines.push(`RECENT: ${trades.map(t => `${t.side} ${t.qty}@${t.price}`).join(", ")}`);
+      }
+      return { resultText: lines.join(" | ") };
+    }
+
+    if (command.type === "STOP_LOSS") {
+      const orderId = `sl_${Date.now()}_${sha256Hex(`${docId}:${command.triggerPrice}:${command.qty}`).slice(0, 8)}`;
+      repo.insertConditionalOrder({
+        orderId,
+        docId,
+        type: "STOP_LOSS",
+        base: command.base,
+        quote: command.quote,
+        triggerPrice: command.triggerPrice,
+        qty: command.qty
+      });
+      const current = repo.getPrice("SUI/USDC");
+      const priceInfo = current ? ` CURRENT=${current.mid_price.toFixed(4)}` : "";
+      return { resultText: `STOP_LOSS=${orderId} SELL ${command.qty} SUI WHEN ≤ ${command.triggerPrice}${priceInfo}` };
+    }
+
+    if (command.type === "TAKE_PROFIT") {
+      const orderId = `tp_${Date.now()}_${sha256Hex(`${docId}:${command.triggerPrice}:${command.qty}`).slice(0, 8)}`;
+      repo.insertConditionalOrder({
+        orderId,
+        docId,
+        type: "TAKE_PROFIT",
+        base: command.base,
+        quote: command.quote,
+        triggerPrice: command.triggerPrice,
+        qty: command.qty
+      });
+      const current = repo.getPrice("SUI/USDC");
+      const priceInfo = current ? ` CURRENT=${current.mid_price.toFixed(4)}` : "";
+      return { resultText: `TAKE_PROFIT=${orderId} SELL ${command.qty} SUI WHEN ≥ ${command.triggerPrice}${priceInfo}` };
     }
 
     if (command.type === "SESSION_CREATE") {
@@ -1237,11 +1418,78 @@ export class Engine {
 
       const side = command.type === "MARKET_BUY" ? "buy" as const : "sell" as const;
       const res = await deepbook.placeMarketOrder({ wallet: secrets.sui, poolKey, managerId, side, qty: command.qty });
+
+      // Record trade for P&L tracking
+      const midPrice = repo.getPrice("SUI/USDC")?.mid_price ?? 0;
+      const notional = command.qty * midPrice;
+      repo.insertTrade({
+        tradeId: `trade_${res.txDigest.slice(0, 16)}`,
+        docId,
+        cmdId,
+        side: side.toUpperCase(),
+        base: "SUI",
+        quote: "USDC",
+        qty: command.qty,
+        price: midPrice,
+        notionalUsdc: notional,
+        txDigest: res.txDigest
+      });
+
       const explorer = `https://suiscan.xyz/testnet/tx/${res.txDigest}`;
       return {
         suiTxDigest: res.txDigest,
-        resultText: `MARKET_${side.toUpperCase()} ${command.qty} SUI SuiTx=${res.txDigest} Explorer=${explorer}`
+        resultText: `MARKET_${side.toUpperCase()} ${command.qty} SUI @~${midPrice.toFixed(4)} SuiTx=${res.txDigest} Explorer=${explorer}`
       };
+    }
+
+    if (command.type === "SWEEP_YIELD") {
+      // Sweep settled DeepBook amounts + consolidate idle capital
+      const results: string[] = [];
+
+      if (deepbook) {
+        const tables = await loadDocWalletTables({ docs: this.ctx.docs, docId });
+        const cfg = readConfig(tables.config.table);
+        const poolKey = cfg["DEEPBOOK_POOL"]?.value?.trim() || "SUI_DBUSDC";
+        const managerId = cfg["DEEPBOOK_MANAGER"]?.value?.trim();
+
+        if (managerId) {
+          // Settle filled orders
+          try {
+            const settleRes = await deepbook.execute({
+              docId,
+              command: { type: "SETTLE" },
+              wallet: secrets.sui,
+              poolKey,
+              managerId
+            });
+            if (settleRes) {
+              results.push(`SETTLED SuiTx=${settleRes.txDigest}`);
+            }
+          } catch (e: any) {
+            results.push(`SETTLE: ${e.message?.slice(0, 50) ?? "skipped"}`);
+          }
+        }
+      }
+
+      // Check for idle Circle capital
+      if (circle) {
+        const circleW = repo.getCircleWallet(docId);
+        if (circleW) {
+          try {
+            const bal = await circle.getWalletBalance(circleW.wallet_id);
+            const idle = Number(bal?.usdcBalance ?? 0);
+            if (idle > 0) {
+              results.push(`CIRCLE_IDLE=$${idle.toFixed(2)}`);
+            }
+          } catch { /* skip */ }
+        }
+      }
+
+      // Get current P&L
+      const stats = repo.getTradeStats(docId);
+      results.push(`PNL=${stats.netPnl >= 0 ? "+" : ""}$${stats.netPnl.toFixed(2)}`);
+
+      return { resultText: `SWEEP: ${results.join(" | ") || "NOTHING_TO_SWEEP"}` };
     }
 
     if (!deepbook) throw new Error("DeepBook disabled (set DEEPBOOK_ENABLED=1)");
@@ -1267,6 +1515,22 @@ export class Engine {
     }
     if (!deepbookRes) return { resultText: `OK` };
     if (deepbookRes.kind === "order") {
+      // Record limit order trade for P&L tracking
+      if (command.type === "LIMIT_BUY" || command.type === "LIMIT_SELL") {
+        const side = command.type === "LIMIT_BUY" ? "BUY" : "SELL";
+        repo.insertTrade({
+          tradeId: `trade_${deepbookRes.txDigest.slice(0, 16)}`,
+          docId,
+          cmdId,
+          side,
+          base: "SUI",
+          quote: "USDC",
+          qty: command.qty,
+          price: command.price,
+          notionalUsdc: command.qty * command.price,
+          txDigest: deepbookRes.txDigest
+        });
+      }
       return {
         suiTxDigest: deepbookRes.txDigest,
         resultText: `SuiTx=${deepbookRes.txDigest} OrderId=${deepbookRes.orderId}`
@@ -1429,13 +1693,46 @@ export class Engine {
           }
         }
 
-        // 5. Auto-rebalance check
+        // 5. Auto-rebalance execution (not just alerting!)
         const autoRebalance = repo.getDocConfig(docId, "auto_rebalance");
-        if (autoRebalance === "1" && deepbook && doc.sui_address) {
-          const gasCheck = await deepbook.checkGas({ address: doc.sui_address, minSui: 0.02 });
-          if (!gasCheck.ok) {
-            decisions.push(`🔄 Auto-rebalance needed: SUI gas critically low (${gasCheck.suiBalance.toFixed(4)} SUI)`);
-            repo.insertAgentActivity(docId, "REBALANCE_NEEDED", `SUI gas at ${gasCheck.suiBalance.toFixed(4)}`);
+        if (autoRebalance === "1") {
+          // Check SUI gas critically low → propose sweep to collect settled funds
+          if (deepbook && doc.sui_address) {
+            const gasCheck = await deepbook.checkGas({ address: doc.sui_address, minSui: 0.02 });
+            if (!gasCheck.ok) {
+              decisions.push(`🔄 Auto-rebalance: SUI gas critically low (${gasCheck.suiBalance.toFixed(4)} SUI)`);
+              repo.insertAgentActivity(docId, "REBALANCE_NEEDED", `SUI gas at ${gasCheck.suiBalance.toFixed(4)}`);
+            }
+          }
+          // Check idle Circle capital → propose sweep_yield to collect it
+          if (circle) {
+            const circleW = repo.getCircleWallet(docId);
+            if (circleW) {
+              try {
+                const bal = await circle.getWalletBalance(circleW.wallet_id);
+                const idle = Number(bal?.usdcBalance ?? 0);
+                if (idle > 200) {
+                  const lastSweep = Number(repo.getDocConfig(docId, "last_sweep_ms") ?? "0");
+                  if (Date.now() - lastSweep > 3600_000) {
+                    decisions.push(`🔄 Auto-sweep: $${idle.toFixed(2)} idle USDC detected`);
+                    repo.insertAgentActivity(docId, "AUTO_SWEEP", `$${idle.toFixed(2)} idle, proposing sweep`);
+                    repo.setDocConfig(docId, "last_sweep_ms", String(Date.now()));
+                  }
+                }
+              } catch { /* ignore */ }
+            }
+          }
+        }
+
+        // 6. Live price tracking + conditional order summary
+        const cachedPrice = repo.getPrice("SUI/USDC");
+        if (cachedPrice && cachedPrice.mid_price > 0) {
+          const activeCondOrders = repo.listActiveConditionalOrders(docId);
+          if (activeCondOrders.length > 0) {
+            const summary = activeCondOrders.map(o =>
+              `${o.type}@${o.trigger_price} (${o.qty} SUI)`
+            ).join(", ");
+            decisions.push(`📊 SUI/USDC=${cachedPrice.mid_price.toFixed(4)} | Watching: ${summary}`);
           }
         }
 
@@ -1589,6 +1886,11 @@ function reconstructDwCommand(cmd: ParsedCommand): string | null {
     case "ALERT_THRESHOLD": return `DW ALERT_THRESHOLD ${cmd.coinType} ${cmd.below}`;
     case "AUTO_REBALANCE": return `DW AUTO_REBALANCE ${cmd.enabled ? "ON" : "OFF"}`;
     case "YELLOW_SEND": return `DW YELLOW_SEND ${cmd.amountUsdc} USDC TO ${cmd.to}`;
+    case "STOP_LOSS": return `DW STOP_LOSS ${cmd.base} ${cmd.qty} @ ${cmd.triggerPrice}`;
+    case "TAKE_PROFIT": return `DW TAKE_PROFIT ${cmd.base} ${cmd.qty} @ ${cmd.triggerPrice}`;
+    case "SWEEP_YIELD": return "DW SWEEP_YIELD";
+    case "TRADE_HISTORY": return "DW TRADE_HISTORY";
+    case "PRICE": return "DW PRICE";
     default: return null;
   }
 }
@@ -1611,8 +1913,47 @@ export function suggestCommandFromChat(input: string, context?: { repo: Repo; do
       const circleW = repo.getCircleWallet(docId);
       const lines = [`Wallets:`, `EVM: ${evmAddr}`, `SUI: ${suiAddr}`];
       if (circleW) lines.push(`Circle/Arc: ${circleW.wallet_address}`);
+      const cached = repo.getPrice("SUI/USDC");
+      if (cached && cached.mid_price > 0) lines.push(`SUI/USDC: $${cached.mid_price.toFixed(4)}`);
+      const stats = repo.getTradeStats(docId);
+      if (stats.totalBuyUsdc > 0 || stats.totalSellUsdc > 0) {
+        lines.push(`Trading P&L: ${stats.netPnl >= 0 ? "+" : ""}$${stats.netPnl.toFixed(2)}`);
+      }
       lines.push("Balances auto-update in the BALANCES table above.");
       return lines.join("\n");
+    }
+
+    if (lower.includes("price") || lower.includes("sui price") || lower.includes("market")) {
+      const cached = repo.getPrice("SUI/USDC");
+      if (cached && cached.mid_price > 0) {
+        const age = Math.floor((Date.now() - cached.updated_at) / 1000);
+        return `SUI/USDC: $${cached.mid_price.toFixed(6)} (bid=${cached.bid.toFixed(6)}, ask=${cached.ask.toFixed(6)}, ${age}s ago)\nUse: DW PRICE for fresh quote`;
+      }
+      return "Price not available yet. Use: DW PRICE to fetch live";
+    }
+
+    if (lower.includes("pnl") || lower.includes("p&l") || lower.includes("profit") || lower.includes("loss") || lower.includes("trade")) {
+      const stats = repo.getTradeStats(docId);
+      const trades = repo.listTrades(docId, 5);
+      const lines = [
+        `Trading P&L: ${stats.netPnl >= 0 ? "+" : ""}$${stats.netPnl.toFixed(2)}`,
+        `Buys: ${stats.totalBuys.toFixed(2)} SUI ($${stats.totalBuyUsdc.toFixed(2)})`,
+        `Sells: ${stats.totalSells.toFixed(2)} SUI ($${stats.totalSellUsdc.toFixed(2)})`,
+        `Fees: $${stats.totalFees.toFixed(2)}`
+      ];
+      if (trades.length > 0) {
+        lines.push(`Recent: ${trades.map(t => `${t.side} ${t.qty}@${t.price}`).join(", ")}`);
+      }
+      return lines.join("\n");
+    }
+
+    if (lower.includes("stop") || lower.includes("conditional") || lower.includes("watching")) {
+      const orders = repo.listActiveConditionalOrders(docId);
+      if (orders.length === 0) return "No active stop-loss or take-profit orders.\nUse: DW STOP_LOSS SUI <qty> @ <price>\nUse: DW TAKE_PROFIT SUI <qty> @ <price>";
+      const cached = repo.getPrice("SUI/USDC");
+      const priceInfo = cached ? ` (current: $${cached.mid_price.toFixed(4)})` : "";
+      const list = orders.map(o => `${o.order_id}: ${o.type} ${o.qty} SUI @ ${o.trigger_price}`).join("\n");
+      return `Active conditional orders${priceInfo}:\n${list}`;
     }
 
     if (lower.includes("signer") && (lower.includes("list") || lower.includes("who"))) {
@@ -1698,6 +2039,25 @@ export function suggestCommandFromChat(input: string, context?: { repo: Repo; do
   const bridgeMatch = lower.match(/bridge\s+([\d.]+)\s*usdc\s+(?:from\s+)?(\w+)\s+(?:to\s+)?(\w+)/i);
   if (bridgeMatch) return `Use: DW BRIDGE ${bridgeMatch[1]} USDC FROM ${bridgeMatch[2]} TO ${bridgeMatch[3]}`;
 
+  // Stop-Loss
+  const slMatch = lower.match(/(?:stop[\s-]?loss|sl)\s+([\d.]+)\s*(?:sui|SUI)\s*(?:at|@)\s*([\d.]+)/);
+  if (slMatch) return `Use: DW STOP_LOSS SUI ${slMatch[1]} @ ${slMatch[2]}`;
+
+  // Take-Profit
+  const tpMatch = lower.match(/(?:take[\s-]?profit|tp)\s+([\d.]+)\s*(?:sui|SUI)\s*(?:at|@)\s*([\d.]+)/);
+  if (tpMatch) return `Use: DW TAKE_PROFIT SUI ${tpMatch[1]} @ ${tpMatch[2]}`;
+  const tpMatch2 = lower.match(/(?:take[\s-]?profit|tp)\s+(?:sui|SUI)\s+([\d.]+)\s*(?:at|@)\s*([\d.]+)/);
+  if (tpMatch2) return `Use: DW TAKE_PROFIT SUI ${tpMatch2[1]} @ ${tpMatch2[2]}`;
+
+  // Sweep yield
+  if (lower.match(/^(?:sweep|collect|harvest)/)) return "Use: DW SWEEP_YIELD";
+
+  // Price check
+  if (lower.match(/^(?:price|prices|quote|what.?s?\s+sui)/)) return "Use: DW PRICE";
+
+  // Trade history / PnL
+  if (lower.match(/^(?:trades?|pnl|p&l|profit|history)/)) return "Use: DW TRADE_HISTORY";
+
   // DCA / Schedule
   const dcaMatch = lower.match(/(?:dca|schedule|recurring)\s+(?:buy\s+)?([\d.]+)\s*(?:sui|SUI)\s*(?:every|each)\s+([\d.]+)\s*h(?:ours?)?(?:\s*(?:at|@)\s*([\d.]+))?/i);
   if (dcaMatch) {
@@ -1734,14 +2094,19 @@ export function suggestCommandFromChat(input: string, context?: { repo: Repo; do
       "Available commands:",
       "• DW /setup — Initialize wallets",
       "• DW STATUS — Show status",
+      "• DW PRICE — Live SUI/USDC price",
       "• DW LIMIT_BUY SUI <qty> USDC @ <price>",
       "• DW LIMIT_SELL SUI <qty> USDC @ <price>",
       "• DW MARKET_BUY SUI <qty> — Market buy",
       "• DW MARKET_SELL SUI <qty> — Market sell",
+      "• DW STOP_LOSS SUI <qty> @ <price> — Auto-sell if price drops",
+      "• DW TAKE_PROFIT SUI <qty> @ <price> — Auto-sell if price rises",
       "• DW DEPOSIT <coin> <amount> — Deposit to DeepBook",
       "• DW WITHDRAW <coin> <amount> — Withdraw from DeepBook",
       "• DW CANCEL <orderId>",
       "• DW SETTLE — Withdraw filled orders",
+      "• DW SWEEP_YIELD — Settle + sweep idle capital",
+      "• DW TRADE_HISTORY — P&L and recent trades",
       "• DW PAYOUT <amt> USDC TO <addr>",
       "• DW BRIDGE <amt> USDC FROM <chain> TO <chain>",
       "• DW SCHEDULE EVERY <N>h: <command>",
@@ -1758,5 +2123,5 @@ export function suggestCommandFromChat(input: string, context?: { repo: Repo; do
     ].join("\n");
   }
 
-  return "I can help! Try: 'buy 10 SUI at 1.5', 'send 50 USDC to 0x...', 'bridge 100 USDC from arc to sui', 'deposit 10 SUI', 'market buy 5 SUI', 'schedule DCA buy 10 SUI every 6h', or type 'help'.";
+  return "I can help! Try: 'buy 10 SUI at 1.5', 'send 50 USDC to 0x...', 'bridge 100 USDC from arc to sui', 'stop loss 50 SUI at 0.80', 'take profit 50 SUI at 2.50', 'price', 'pnl', 'sweep', or type 'help'.";
 }

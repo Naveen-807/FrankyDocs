@@ -161,4 +161,46 @@ CREATE TABLE IF NOT EXISTS agent_activity (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_activity_doc ON agent_activity(doc_id, created_at);
+
+CREATE TABLE IF NOT EXISTS trades (
+  trade_id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL,
+  cmd_id TEXT NOT NULL,
+  side TEXT NOT NULL,
+  base TEXT NOT NULL DEFAULT 'SUI',
+  quote TEXT NOT NULL DEFAULT 'USDC',
+  qty REAL NOT NULL,
+  price REAL NOT NULL,
+  notional_usdc REAL NOT NULL,
+  fee_usdc REAL NOT NULL DEFAULT 0,
+  tx_digest TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_doc ON trades(doc_id, created_at);
+
+CREATE TABLE IF NOT EXISTS price_cache (
+  pair TEXT PRIMARY KEY,
+  mid_price REAL NOT NULL,
+  bid REAL NOT NULL DEFAULT 0,
+  ask REAL NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'deepbook',
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conditional_orders (
+  order_id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  base TEXT NOT NULL DEFAULT 'SUI',
+  quote TEXT NOT NULL DEFAULT 'USDC',
+  trigger_price REAL NOT NULL,
+  qty REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  triggered_cmd_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conditional_orders_doc ON conditional_orders(doc_id, status);
 `;

@@ -75,6 +75,9 @@ export interface DeepBookClient {
   /** Check if address has enough gas for transactions. */
   checkGas(params: { address: string; minSui?: number }): Promise<{ ok: boolean; suiBalance: number; minRequired: number }>;
 
+  /** Get mid-price from the orderbook (bid+ask)/2 for price oracle. */
+  getMidPrice(params: { poolKey: string }): Promise<{ bid: number; ask: number; mid: number; spread: number }>;
+
   /** Get full status including balances, orders, gas. */
   getFullStatus(params: {
     wallet: SuiWalletMaterial;
@@ -404,6 +407,57 @@ export class DeepBookV3Client implements DeepBookClient {
       return { ok: suiBalance >= minRequired, suiBalance, minRequired };
     } catch {
       return { ok: false, suiBalance: 0, minRequired };
+    }
+  }
+
+  /**
+   * Get mid-price from the DeepBook V3 orderbook.
+   * Uses the on-chain book state to derive bid/ask/mid/spread.
+   */
+  async getMidPrice(params: { poolKey: string }): Promise<{ bid: number; ask: number; mid: number; spread: number }> {
+    try {
+      // Use a temporary deepbook client to read orderbook state
+      // We pass a dummy address since we're only reading, not trading
+      const dummyAddress = "0x0000000000000000000000000000000000000000000000000000000000000001";
+      const deepbook = new MystenDeepBookClient({
+        address: dummyAddress,
+        env: this.network as any,
+        client: this.sui as any
+      });
+
+      const [base, quote] = splitPoolKey(params.poolKey);
+      const poolKey = params.poolKey;
+
+      // Try to get book state via level2 orderbook query
+      // DeepBook V3 exposes level2Range or we can read from best bid/ask
+      try {
+        const level2 = await (deepbook as any).getLevel2Range(poolKey, 0, Number.MAX_SAFE_INTEGER, true);
+        const bids = level2?.bids ?? [];
+        const asks = level2?.asks ?? [];
+
+        const bestBid = bids.length > 0 ? Number(bids[0]?.[0] ?? bids[0]?.price ?? 0) : 0;
+        const bestAsk = asks.length > 0 ? Number(asks[0]?.[0] ?? asks[0]?.price ?? 0) : 0;
+
+        if (bestBid > 0 && bestAsk > 0) {
+          const mid = (bestBid + bestAsk) / 2;
+          const spread = (bestAsk - bestBid) / mid * 100;
+          return { bid: bestBid, ask: bestAsk, mid, spread };
+        }
+      } catch { /* level2 not available, try fallback */ }
+
+      // Fallback: try getQuoteQuantityOut for a small SUI amount to estimate price
+      try {
+        const quoteOut = await (deepbook as any).getQuoteQuantityOut(poolKey, 1);
+        const price = Number(quoteOut ?? 0);
+        if (price > 0) {
+          return { bid: price * 0.999, ask: price * 1.001, mid: price, spread: 0.2 };
+        }
+      } catch { /* fallback also failed */ }
+
+      // Final fallback: return 0s (no liquidity or pool not found)
+      return { bid: 0, ask: 0, mid: 0, spread: 0 };
+    } catch {
+      return { bid: 0, ask: 0, mid: 0, spread: 0 };
     }
   }
 

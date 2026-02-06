@@ -39,7 +39,12 @@ export type ParsedCommand =
   | { type: "MARKET_SELL"; base: "SUI"; quote: "USDC"; qty: number }
   | { type: "ALERT_THRESHOLD"; coinType: string; below: number }
   | { type: "AUTO_REBALANCE"; enabled: boolean }
-  | { type: "YELLOW_SEND"; amountUsdc: number; to: `0x${string}` };
+  | { type: "YELLOW_SEND"; amountUsdc: number; to: `0x${string}` }
+  | { type: "STOP_LOSS"; base: "SUI"; quote: "USDC"; qty: number; triggerPrice: number }
+  | { type: "TAKE_PROFIT"; base: "SUI"; quote: "USDC"; qty: number; triggerPrice: number }
+  | { type: "SWEEP_YIELD" }
+  | { type: "TRADE_HISTORY" }
+  | { type: "PRICE" };
 
 const HexString = z
   .string()
@@ -160,7 +165,24 @@ export const ParsedCommandSchema: z.ZodType<ParsedCommand, z.ZodTypeDef, unknown
     type: z.literal("YELLOW_SEND"),
     amountUsdc: z.number().positive(),
     to: AddressString
-  })
+  }),
+  z.object({
+    type: z.literal("STOP_LOSS"),
+    base: z.literal("SUI"),
+    quote: z.literal("USDC"),
+    qty: z.number().positive(),
+    triggerPrice: z.number().positive()
+  }),
+  z.object({
+    type: z.literal("TAKE_PROFIT"),
+    base: z.literal("SUI"),
+    quote: z.literal("USDC"),
+    qty: z.number().positive(),
+    triggerPrice: z.number().positive()
+  }),
+  z.object({ type: z.literal("SWEEP_YIELD") }),
+  z.object({ type: z.literal("TRADE_HISTORY") }),
+  z.object({ type: z.literal("PRICE") })
 ]);
 
 export type ParseResult =
@@ -259,6 +281,33 @@ export function tryAutoDetect(raw: string): ParseResult | null {
   const cancelSchedMatch = trimmed.match(/^cancel\s+(?:schedule\s+)?(sched_\w+)$/i);
   if (cancelSchedMatch) {
     return parseCommand(`DW CANCEL_SCHEDULE ${cancelSchedMatch[1]}`);
+  }
+
+  // "stop loss 100 SUI at 0.80" / "stop-loss SUI 100 @ 0.80"
+  const stopMatch = trimmed.match(/^stop[- ]?loss\s+(?:SUI\s+)?([\d.]+)\s*(?:SUI\s+)?(?:at|@)\s*([\d.]+)$/i);
+  if (stopMatch) {
+    return parseCommand(`DW STOP_LOSS SUI ${stopMatch[1]} @ ${stopMatch[2]}`);
+  }
+
+  // "take profit 100 SUI at 2.50" / "tp SUI 100 @ 2.50"
+  const tpMatch = trimmed.match(/^(?:take[- ]?profit|tp)\s+(?:SUI\s+)?([\d.]+)\s*(?:SUI\s+)?(?:at|@)\s*([\d.]+)$/i);
+  if (tpMatch) {
+    return parseCommand(`DW TAKE_PROFIT SUI ${tpMatch[1]} @ ${tpMatch[2]}`);
+  }
+
+  // "sweep" / "sweep yield" / "collect"
+  if (lower === "sweep" || lower === "sweep yield" || lower === "collect") {
+    return parseCommand("DW SWEEP_YIELD");
+  }
+
+  // "trades" / "pnl" / "p&l" / "trade history"
+  if (lower === "trades" || lower === "pnl" || lower === "p&l" || lower === "trade history") {
+    return parseCommand("DW TRADE_HISTORY");
+  }
+
+  // "price" / "prices"
+  if (lower === "price" || lower === "prices") {
+    return parseCommand("DW PRICE");
   }
 
   return null;
@@ -547,6 +596,48 @@ export function parseCommand(raw: string): ParseResult {
     const parsed = ParsedCommandSchema.safeParse({ type: "YELLOW_SEND", amountUsdc, to });
     if (!parsed.success) return { ok: false, error: "Invalid address" };
     return { ok: true, value: parsed.data };
+  }
+
+  if (op === "STOP_LOSS") {
+    // DW STOP_LOSS SUI 100 @ 0.80
+    const base = (parts[2] ?? "").toUpperCase();
+    const qtyStr = parts[3] ?? "";
+    const at = parts[4] ?? "";
+    const priceStr = parts[5] ?? "";
+    if (base !== "SUI") return { ok: false, error: "STOP_LOSS only supports SUI" };
+    if (at !== "@") return { ok: false, error: "STOP_LOSS expects @ <trigger_price>" };
+    const qty = parseNumber(qtyStr);
+    const triggerPrice = parseNumber(priceStr);
+    if (qty === null || qty <= 0) return { ok: false, error: "Invalid qty" };
+    if (triggerPrice === null || triggerPrice <= 0) return { ok: false, error: "Invalid trigger price" };
+    return { ok: true, value: { type: "STOP_LOSS", base: "SUI", quote: "USDC", qty, triggerPrice } };
+  }
+
+  if (op === "TAKE_PROFIT") {
+    // DW TAKE_PROFIT SUI 100 @ 2.50
+    const base = (parts[2] ?? "").toUpperCase();
+    const qtyStr = parts[3] ?? "";
+    const at = parts[4] ?? "";
+    const priceStr = parts[5] ?? "";
+    if (base !== "SUI") return { ok: false, error: "TAKE_PROFIT only supports SUI" };
+    if (at !== "@") return { ok: false, error: "TAKE_PROFIT expects @ <trigger_price>" };
+    const qty = parseNumber(qtyStr);
+    const triggerPrice = parseNumber(priceStr);
+    if (qty === null || qty <= 0) return { ok: false, error: "Invalid qty" };
+    if (triggerPrice === null || triggerPrice <= 0) return { ok: false, error: "Invalid trigger price" };
+    return { ok: true, value: { type: "TAKE_PROFIT", base: "SUI", quote: "USDC", qty, triggerPrice } };
+  }
+
+  if (op === "SWEEP_YIELD" || op === "SWEEP") {
+    return { ok: true, value: { type: "SWEEP_YIELD" } };
+  }
+
+  if (op === "TRADE_HISTORY" || op === "TRADES" || op === "PNL" || op === "P&L") {
+    return { ok: true, value: { type: "TRADE_HISTORY" } };
+  }
+
+  if (op === "PRICE" || op === "PRICES") {
+    return { ok: true, value: { type: "PRICE" } };
   }
 
   return { ok: false, error: `Unknown command: ${op}` };

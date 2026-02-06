@@ -139,6 +139,44 @@ export type AgentActivityRow = {
   created_at: number;
 };
 
+export type TradeRow = {
+  trade_id: string;
+  doc_id: string;
+  cmd_id: string;
+  side: string;
+  base: string;
+  quote: string;
+  qty: number;
+  price: number;
+  notional_usdc: number;
+  fee_usdc: number;
+  tx_digest: string | null;
+  created_at: number;
+};
+
+export type PriceCacheRow = {
+  pair: string;
+  mid_price: number;
+  bid: number;
+  ask: number;
+  source: string;
+  updated_at: number;
+};
+
+export type ConditionalOrderRow = {
+  order_id: string;
+  doc_id: string;
+  type: string;
+  base: string;
+  quote: string;
+  trigger_price: number;
+  qty: number;
+  status: string;
+  triggered_cmd_id: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
 export class Repo {
   private db: Database.Database;
 
@@ -725,5 +763,118 @@ export class Repo {
     return this.db
       .prepare(`SELECT * FROM agent_activity WHERE doc_id=? ORDER BY created_at DESC LIMIT ?`)
       .all(docId, limit) as AgentActivityRow[];
+  }
+
+  // --- Trade P&L tracking ---
+
+  insertTrade(params: {
+    tradeId: string;
+    docId: string;
+    cmdId: string;
+    side: string;
+    base: string;
+    quote: string;
+    qty: number;
+    price: number;
+    notionalUsdc: number;
+    feeUsdc?: number;
+    txDigest?: string | null;
+  }) {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO trades(trade_id,doc_id,cmd_id,side,base,quote,qty,price,notional_usdc,fee_usdc,tx_digest,created_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        params.tradeId, params.docId, params.cmdId, params.side,
+        params.base, params.quote, params.qty, params.price,
+        params.notionalUsdc, params.feeUsdc ?? 0, params.txDigest ?? null, now
+      );
+  }
+
+  listTrades(docId: string, limit = 100): TradeRow[] {
+    return this.db
+      .prepare(`SELECT * FROM trades WHERE doc_id=? ORDER BY created_at DESC LIMIT ?`)
+      .all(docId, limit) as TradeRow[];
+  }
+
+  getTradeStats(docId: string): { totalBuys: number; totalSells: number; totalBuyUsdc: number; totalSellUsdc: number; totalFees: number; netPnl: number } {
+    const result = this.db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN side='BUY' THEN qty ELSE 0 END), 0) as totalBuys,
+           COALESCE(SUM(CASE WHEN side='SELL' THEN qty ELSE 0 END), 0) as totalSells,
+           COALESCE(SUM(CASE WHEN side='BUY' THEN notional_usdc ELSE 0 END), 0) as totalBuyUsdc,
+           COALESCE(SUM(CASE WHEN side='SELL' THEN notional_usdc ELSE 0 END), 0) as totalSellUsdc,
+           COALESCE(SUM(fee_usdc), 0) as totalFees
+         FROM trades WHERE doc_id=?`
+      )
+      .get(docId) as { totalBuys: number; totalSells: number; totalBuyUsdc: number; totalSellUsdc: number; totalFees: number };
+    return {
+      ...result,
+      netPnl: result.totalSellUsdc - result.totalBuyUsdc - result.totalFees
+    };
+  }
+
+  // --- Price oracle cache ---
+
+  upsertPrice(pair: string, midPrice: number, bid: number, ask: number, source = "deepbook") {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO price_cache(pair,mid_price,bid,ask,source,updated_at) VALUES(?,?,?,?,?,?)
+         ON CONFLICT(pair) DO UPDATE SET mid_price=excluded.mid_price, bid=excluded.bid, ask=excluded.ask, source=excluded.source, updated_at=excluded.updated_at`
+      )
+      .run(pair, midPrice, bid, ask, source, now);
+  }
+
+  getPrice(pair: string): PriceCacheRow | undefined {
+    return this.db.prepare(`SELECT * FROM price_cache WHERE pair=?`).get(pair) as PriceCacheRow | undefined;
+  }
+
+  // --- Conditional orders (stop-loss / take-profit) ---
+
+  insertConditionalOrder(params: {
+    orderId: string;
+    docId: string;
+    type: string;
+    base: string;
+    quote: string;
+    triggerPrice: number;
+    qty: number;
+  }) {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO conditional_orders(order_id,doc_id,type,base,quote,trigger_price,qty,status,triggered_cmd_id,created_at,updated_at)
+         VALUES(?,?,?,?,?,?,?,'ACTIVE',NULL,?,?)`
+      )
+      .run(params.orderId, params.docId, params.type, params.base, params.quote, params.triggerPrice, params.qty, now, now);
+  }
+
+  listActiveConditionalOrders(docId?: string): ConditionalOrderRow[] {
+    if (docId) {
+      return this.db
+        .prepare(`SELECT * FROM conditional_orders WHERE doc_id=? AND status='ACTIVE' ORDER BY created_at ASC`)
+        .all(docId) as ConditionalOrderRow[];
+    }
+    return this.db
+      .prepare(`SELECT * FROM conditional_orders WHERE status='ACTIVE' ORDER BY created_at ASC`)
+      .all() as ConditionalOrderRow[];
+  }
+
+  triggerConditionalOrder(orderId: string, cmdId: string) {
+    const now = Date.now();
+    this.db
+      .prepare(`UPDATE conditional_orders SET status='TRIGGERED', triggered_cmd_id=?, updated_at=? WHERE order_id=?`)
+      .run(cmdId, now, orderId);
+  }
+
+  cancelConditionalOrder(orderId: string) {
+    const now = Date.now();
+    this.db
+      .prepare(`UPDATE conditional_orders SET status='CANCELLED', updated_at=? WHERE order_id=?`)
+      .run(now, orderId);
   }
 }
