@@ -839,9 +839,8 @@ export class Engine {
 
     if (command.type === "POLICY_ENS") {
       repo.setDocPolicy(docId, { policySource: "ENS", ensName: command.ensName });
-      let tables = await loadDocWalletTables({ docs: this.ctx.docs, docId });
+      const tables = await loadDocWalletTables({ docs: this.ctx.docs, docId });
       await writeConfigValue({ docs: this.ctx.docs, docId, configTable: tables.config.table, key: "POLICY_SOURCE", value: "ENS" });
-      tables = await loadDocWalletTables({ docs: this.ctx.docs, docId });
       await writeConfigValue({ docs: this.ctx.docs, docId, configTable: tables.config.table, key: "ENS_NAME", value: command.ensName });
       return { resultText: `ENS=${command.ensName}` };
     }
@@ -936,6 +935,20 @@ export class Engine {
       if (schedule.doc_id !== docId) throw new Error("Schedule belongs to a different doc");
       repo.cancelSchedule(command.scheduleId);
       return { resultText: `SCHEDULE_CANCELLED=${command.scheduleId} (ran ${schedule.total_runs} times)` };
+    }
+
+    // --- Agent Configuration Commands — no wallet secrets needed ---
+
+    if (command.type === "ALERT_THRESHOLD") {
+      repo.setDocConfig(docId, `alert_threshold_${command.coinType.toLowerCase()}`, String(command.below));
+      repo.insertAgentActivity(docId, "CONFIG", `Alert threshold set: ${command.coinType} < ${command.below}`);
+      return { resultText: `ALERT_THRESHOLD ${command.coinType} < ${command.below}` };
+    }
+
+    if (command.type === "AUTO_REBALANCE") {
+      repo.setDocConfig(docId, "auto_rebalance", command.enabled ? "1" : "0");
+      repo.insertAgentActivity(docId, "CONFIG", `Auto-rebalance ${command.enabled ? "enabled" : "disabled"}`);
+      return { resultText: `AUTO_REBALANCE=${command.enabled ? "ON" : "OFF"}` };
     }
 
     const secrets = loadDocSecrets({ repo, masterKey: config.DOCWALLET_MASTER_KEY, docId });
@@ -1144,20 +1157,6 @@ export class Engine {
         suiTxDigest: res.txDigest,
         resultText: `MARKET_${side.toUpperCase()} ${command.qty} SUI SuiTx=${res.txDigest} Explorer=${explorer}`
       };
-    }
-
-    // --- Agent Configuration Commands (Arc autonomous agent) ---
-
-    if (command.type === "ALERT_THRESHOLD") {
-      repo.setDocConfig(docId, `alert_threshold_${command.coinType.toLowerCase()}`, String(command.below));
-      repo.insertAgentActivity(docId, "CONFIG", `Alert threshold set: ${command.coinType} < ${command.below}`);
-      return { resultText: `ALERT_THRESHOLD ${command.coinType} < ${command.below}` };
-    }
-
-    if (command.type === "AUTO_REBALANCE") {
-      repo.setDocConfig(docId, "auto_rebalance", command.enabled ? "1" : "0");
-      repo.insertAgentActivity(docId, "CONFIG", `Auto-rebalance ${command.enabled ? "enabled" : "disabled"}`);
-      return { resultText: `AUTO_REBALANCE=${command.enabled ? "ON" : "OFF"}` };
     }
 
     if (!deepbook) throw new Error("DeepBook disabled (set DEEPBOOK_ENABLED=1)");

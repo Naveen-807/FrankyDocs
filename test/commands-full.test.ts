@@ -1,0 +1,632 @@
+import { describe, expect, it } from "vitest";
+import { parseCommand, tryAutoDetect } from "../src/core/commands.js";
+
+const ADDR1 = "0x0000000000000000000000000000000000000001";
+const ADDR2 = "0x0000000000000000000000000000000000000002";
+
+describe("parseCommand — every command type", () => {
+  // ============================================================
+  // 1. DW /setup
+  // ============================================================
+  describe("SETUP", () => {
+    it("parses DW /setup", () => {
+      const r = parseCommand("DW /setup");
+      expect(r).toEqual({ ok: true, value: { type: "SETUP" } });
+    });
+    it("parses DW SETUP (without slash)", () => {
+      const r = parseCommand("DW SETUP");
+      expect(r).toEqual({ ok: true, value: { type: "SETUP" } });
+    });
+    it("parses case-insensitively", () => {
+      const r = parseCommand("dw /setup");
+      expect(r).toEqual({ ok: true, value: { type: "SETUP" } });
+    });
+  });
+
+  // ============================================================
+  // 2. DW STATUS
+  // ============================================================
+  describe("STATUS", () => {
+    it("parses DW STATUS", () => {
+      const r = parseCommand("DW STATUS");
+      expect(r).toEqual({ ok: true, value: { type: "STATUS" } });
+    });
+  });
+
+  // ============================================================
+  // 3. DW SESSION_CREATE
+  // ============================================================
+  describe("SESSION_CREATE", () => {
+    it("parses DW SESSION_CREATE", () => {
+      const r = parseCommand("DW SESSION_CREATE");
+      expect(r).toEqual({ ok: true, value: { type: "SESSION_CREATE" } });
+    });
+  });
+
+  // ============================================================
+  // 4. DW SIGNER_ADD
+  // ============================================================
+  describe("SIGNER_ADD", () => {
+    it("parses DW SIGNER_ADD <addr> WEIGHT <n>", () => {
+      const r = parseCommand(`DW SIGNER_ADD ${ADDR1} WEIGHT 2`);
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.value).toEqual({ type: "SIGNER_ADD", address: ADDR1, weight: 2 });
+      }
+    });
+    it("rejects missing WEIGHT keyword", () => {
+      const r = parseCommand(`DW SIGNER_ADD ${ADDR1} 2`);
+      expect(r.ok).toBe(false);
+    });
+    it("rejects invalid address", () => {
+      const r = parseCommand("DW SIGNER_ADD 0xinvalid WEIGHT 1");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects weight 0", () => {
+      const r = parseCommand(`DW SIGNER_ADD ${ADDR1} WEIGHT 0`);
+      expect(r.ok).toBe(false);
+    });
+    it("rejects fractional weight", () => {
+      const r = parseCommand(`DW SIGNER_ADD ${ADDR1} WEIGHT 1.5`);
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 5. DW QUORUM
+  // ============================================================
+  describe("QUORUM", () => {
+    it("parses DW QUORUM 2", () => {
+      const r = parseCommand("DW QUORUM 2");
+      expect(r).toEqual({ ok: true, value: { type: "QUORUM", quorum: 2 } });
+    });
+    it("rejects 0", () => {
+      const r = parseCommand("DW QUORUM 0");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects negative", () => {
+      const r = parseCommand("DW QUORUM -1");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects fractional", () => {
+      const r = parseCommand("DW QUORUM 1.5");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 6. DW CONNECT
+  // ============================================================
+  describe("CONNECT", () => {
+    it("parses DW CONNECT <wcUri>", () => {
+      const r = parseCommand("DW CONNECT wc:abc123@2?relay-protocol=irn&symKey=xxx");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "CONNECT") {
+        expect(r.value.wcUri).toContain("wc:abc123");
+      }
+    });
+    it("rejects empty URI", () => {
+      const r = parseCommand("DW CONNECT");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 7. DW TX (WC_TX)
+  // ============================================================
+  describe("WC_TX", () => {
+    it("parses DW TX with valid JSON", () => {
+      const payload = JSON.stringify({ chainId: 1, to: ADDR1 });
+      const r = parseCommand(`DW TX ${payload}`);
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "WC_TX") {
+        expect(r.value.chainId).toBe(1);
+        expect(r.value.to).toBe(ADDR1);
+      }
+    });
+    it("rejects invalid JSON", () => {
+      const r = parseCommand("DW TX not-json");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects missing to field", () => {
+      const r = parseCommand(`DW TX ${JSON.stringify({ chainId: 1 })}`);
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 8. DW SIGN (WC_SIGN)
+  // ============================================================
+  describe("WC_SIGN", () => {
+    it("parses DW SIGN with valid JSON", () => {
+      const payload = JSON.stringify({ address: ADDR1, message: "hello" });
+      const r = parseCommand(`DW SIGN ${payload}`);
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "WC_SIGN") {
+        expect(r.value.address).toBe(ADDR1);
+        expect(r.value.message).toBe("hello");
+      }
+    });
+    it("rejects empty payload", () => {
+      const r = parseCommand("DW SIGN");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 9. DW LIMIT_BUY
+  // ============================================================
+  describe("LIMIT_BUY", () => {
+    it("parses DW LIMIT_BUY SUI 50 USDC @ 1.02", () => {
+      const r = parseCommand("DW LIMIT_BUY SUI 50 USDC @ 1.02");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "LIMIT_BUY") {
+        expect(r.value.base).toBe("SUI");
+        expect(r.value.quote).toBe("USDC");
+        expect(r.value.qty).toBe(50);
+        expect(r.value.price).toBe(1.02);
+      }
+    });
+    it("rejects missing @", () => {
+      const r = parseCommand("DW LIMIT_BUY SUI 50 USDC 1.02");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects non-SUI base", () => {
+      const r = parseCommand("DW LIMIT_BUY ETH 50 USDC @ 1.02");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects qty 0", () => {
+      const r = parseCommand("DW LIMIT_BUY SUI 0 USDC @ 1.02");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 10. DW LIMIT_SELL
+  // ============================================================
+  describe("LIMIT_SELL", () => {
+    it("parses DW LIMIT_SELL SUI 10 USDC @ 2.5", () => {
+      const r = parseCommand("DW LIMIT_SELL SUI 10 USDC @ 2.5");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "LIMIT_SELL") {
+        expect(r.value.qty).toBe(10);
+        expect(r.value.price).toBe(2.5);
+      }
+    });
+  });
+
+  // ============================================================
+  // 11. DW CANCEL
+  // ============================================================
+  describe("CANCEL", () => {
+    it("parses DW CANCEL order123", () => {
+      const r = parseCommand("DW CANCEL order123");
+      expect(r).toEqual({ ok: true, value: { type: "CANCEL", orderId: "order123" } });
+    });
+    it("rejects missing orderId", () => {
+      const r = parseCommand("DW CANCEL");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 12. DW SETTLE
+  // ============================================================
+  describe("SETTLE", () => {
+    it("parses DW SETTLE", () => {
+      const r = parseCommand("DW SETTLE");
+      expect(r).toEqual({ ok: true, value: { type: "SETTLE" } });
+    });
+  });
+
+  // ============================================================
+  // 13. DW PAYOUT
+  // ============================================================
+  describe("PAYOUT", () => {
+    it("parses DW PAYOUT 10 USDC TO <addr>", () => {
+      const r = parseCommand(`DW PAYOUT 10 USDC TO ${ADDR1}`);
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "PAYOUT") {
+        expect(r.value.amountUsdc).toBe(10);
+        expect(r.value.to).toBe(ADDR1);
+      }
+    });
+    it("rejects non-USDC", () => {
+      const r = parseCommand(`DW PAYOUT 10 ETH TO ${ADDR1}`);
+      expect(r.ok).toBe(false);
+    });
+    it("rejects missing TO", () => {
+      const r = parseCommand(`DW PAYOUT 10 USDC ${ADDR1}`);
+      expect(r.ok).toBe(false);
+    });
+    it("rejects amount 0", () => {
+      const r = parseCommand(`DW PAYOUT 0 USDC TO ${ADDR1}`);
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 14. DW PAYOUT_SPLIT
+  // ============================================================
+  describe("PAYOUT_SPLIT", () => {
+    it("parses DW PAYOUT_SPLIT 100 USDC TO <a>:60,<b>:40", () => {
+      const r = parseCommand(`DW PAYOUT_SPLIT 100 USDC TO ${ADDR1}:60,${ADDR2}:40`);
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "PAYOUT_SPLIT") {
+        expect(r.value.amountUsdc).toBe(100);
+        expect(r.value.recipients).toHaveLength(2);
+        expect(r.value.recipients[0].pct).toBe(60);
+        expect(r.value.recipients[1].pct).toBe(40);
+      }
+    });
+    it("rejects split not summing to 100", () => {
+      const r = parseCommand(`DW PAYOUT_SPLIT 100 USDC TO ${ADDR1}:30,${ADDR2}:40`);
+      expect(r.ok).toBe(false);
+    });
+    it("rejects single recipient", () => {
+      const r = parseCommand(`DW PAYOUT_SPLIT 100 USDC TO ${ADDR1}:100`);
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 15. DW POLICY ENS
+  // ============================================================
+  describe("POLICY_ENS", () => {
+    it("parses DW POLICY ENS treasury.eth", () => {
+      const r = parseCommand("DW POLICY ENS treasury.eth");
+      expect(r).toEqual({ ok: true, value: { type: "POLICY_ENS", ensName: "treasury.eth" } });
+    });
+    it("rejects non-ENS subcommand", () => {
+      const r = parseCommand("DW POLICY FOO bar");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects missing name", () => {
+      const r = parseCommand("DW POLICY ENS");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 16. DW SCHEDULE
+  // ============================================================
+  describe("SCHEDULE", () => {
+    it("parses DW SCHEDULE EVERY 4h: LIMIT_BUY SUI 10 USDC @ 1.02", () => {
+      const r = parseCommand("DW SCHEDULE EVERY 4h: LIMIT_BUY SUI 10 USDC @ 1.02");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "SCHEDULE") {
+        expect(r.value.intervalHours).toBe(4);
+        expect(r.value.innerCommand).toContain("LIMIT_BUY");
+      }
+    });
+    it("parses with DW prefix in inner command", () => {
+      const r = parseCommand("DW SCHEDULE EVERY 24h: DW PAYOUT 5 USDC TO " + ADDR1);
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "SCHEDULE") {
+        expect(r.value.innerCommand).toContain("DW");
+      }
+    });
+    it("rejects nested schedule", () => {
+      const r = parseCommand("DW SCHEDULE EVERY 1h: SCHEDULE EVERY 2h: STATUS");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects invalid inner command", () => {
+      const r = parseCommand("DW SCHEDULE EVERY 1h: INVALID_COMMAND");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects bad format", () => {
+      const r = parseCommand("DW SCHEDULE 4h LIMIT_BUY SUI 10 USDC @ 1.02");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 17. DW CANCEL_SCHEDULE / UNSCHEDULE
+  // ============================================================
+  describe("CANCEL_SCHEDULE", () => {
+    it("parses DW CANCEL_SCHEDULE sched_123", () => {
+      const r = parseCommand("DW CANCEL_SCHEDULE sched_123");
+      expect(r).toEqual({ ok: true, value: { type: "CANCEL_SCHEDULE", scheduleId: "sched_123" } });
+    });
+    it("parses DW UNSCHEDULE alias", () => {
+      const r = parseCommand("DW UNSCHEDULE sched_456");
+      expect(r).toEqual({ ok: true, value: { type: "CANCEL_SCHEDULE", scheduleId: "sched_456" } });
+    });
+    it("rejects missing id", () => {
+      expect(parseCommand("DW CANCEL_SCHEDULE").ok).toBe(false);
+      expect(parseCommand("DW UNSCHEDULE").ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 18. DW BRIDGE
+  // ============================================================
+  describe("BRIDGE", () => {
+    it("parses DW BRIDGE 100 USDC FROM arc TO sui", () => {
+      const r = parseCommand("DW BRIDGE 100 USDC FROM arc TO sui");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "BRIDGE") {
+        expect(r.value.amountUsdc).toBe(100);
+        expect(r.value.fromChain).toBe("arc");
+        expect(r.value.toChain).toBe("sui");
+      }
+    });
+    it("rejects same chain", () => {
+      const r = parseCommand("DW BRIDGE 100 USDC FROM arc TO arc");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects invalid chain", () => {
+      const r = parseCommand("DW BRIDGE 100 USDC FROM bitcoin TO sui");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects non-USDC", () => {
+      const r = parseCommand("DW BRIDGE 100 ETH FROM arc TO sui");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 19. DW SESSION_CLOSE
+  // ============================================================
+  describe("SESSION_CLOSE", () => {
+    it("parses DW SESSION_CLOSE", () => {
+      const r = parseCommand("DW SESSION_CLOSE");
+      expect(r).toEqual({ ok: true, value: { type: "SESSION_CLOSE" } });
+    });
+  });
+
+  // ============================================================
+  // 20. DW SESSION_STATUS
+  // ============================================================
+  describe("SESSION_STATUS", () => {
+    it("parses DW SESSION_STATUS", () => {
+      const r = parseCommand("DW SESSION_STATUS");
+      expect(r).toEqual({ ok: true, value: { type: "SESSION_STATUS" } });
+    });
+  });
+
+  // ============================================================
+  // 21. DW DEPOSIT
+  // ============================================================
+  describe("DEPOSIT", () => {
+    it("parses DW DEPOSIT SUI 10", () => {
+      const r = parseCommand("DW DEPOSIT SUI 10");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "DEPOSIT") {
+        expect(r.value.coinType).toBe("SUI");
+        expect(r.value.amount).toBe(10);
+      }
+    });
+    it("parses DW DEPOSIT USDC 50", () => {
+      const r = parseCommand("DW DEPOSIT USDC 50");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "DEPOSIT") {
+        expect(r.value.coinType).toBe("USDC");
+        expect(r.value.amount).toBe(50);
+      }
+    });
+    it("rejects missing amount", () => {
+      const r = parseCommand("DW DEPOSIT SUI");
+      expect(r.ok).toBe(false);
+    });
+    it("rejects amount 0", () => {
+      const r = parseCommand("DW DEPOSIT SUI 0");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 22. DW WITHDRAW
+  // ============================================================
+  describe("WITHDRAW", () => {
+    it("parses DW WITHDRAW SUI 5", () => {
+      const r = parseCommand("DW WITHDRAW SUI 5");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "WITHDRAW") {
+        expect(r.value.coinType).toBe("SUI");
+        expect(r.value.amount).toBe(5);
+      }
+    });
+    it("rejects negative", () => {
+      const r = parseCommand("DW WITHDRAW SUI -5");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 23. DW MARKET_BUY
+  // ============================================================
+  describe("MARKET_BUY", () => {
+    it("parses DW MARKET_BUY SUI 10", () => {
+      const r = parseCommand("DW MARKET_BUY SUI 10");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "MARKET_BUY") {
+        expect(r.value.base).toBe("SUI");
+        expect(r.value.quote).toBe("USDC");
+        expect(r.value.qty).toBe(10);
+      }
+    });
+    it("rejects non-SUI", () => {
+      const r = parseCommand("DW MARKET_BUY ETH 10");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 24. DW MARKET_SELL
+  // ============================================================
+  describe("MARKET_SELL", () => {
+    it("parses DW MARKET_SELL SUI 5", () => {
+      const r = parseCommand("DW MARKET_SELL SUI 5");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "MARKET_SELL") {
+        expect(r.value.base).toBe("SUI");
+        expect(r.value.quote).toBe("USDC");
+        expect(r.value.qty).toBe(5);
+      }
+    });
+  });
+
+  // ============================================================
+  // 25. DW ALERT / ALERT_THRESHOLD
+  // ============================================================
+  describe("ALERT_THRESHOLD", () => {
+    it("parses DW ALERT USDC BELOW 500", () => {
+      const r = parseCommand("DW ALERT USDC BELOW 500");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "ALERT_THRESHOLD") {
+        expect(r.value.coinType).toBe("USDC");
+        expect(r.value.below).toBe(500);
+      }
+    });
+    it("parses DW ALERT_THRESHOLD SUI 0.5", () => {
+      const r = parseCommand("DW ALERT_THRESHOLD SUI 0.5");
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "ALERT_THRESHOLD") {
+        expect(r.value.coinType).toBe("SUI");
+        expect(r.value.below).toBe(0.5);
+      }
+    });
+    it("allows threshold of 0 (disable)", () => {
+      const r = parseCommand("DW ALERT USDC BELOW 0");
+      expect(r.ok).toBe(true);
+    });
+    it("rejects bad format (ALERT without BELOW)", () => {
+      const r = parseCommand("DW ALERT USDC 500");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // 26. DW AUTO_REBALANCE
+  // ============================================================
+  describe("AUTO_REBALANCE", () => {
+    it("parses DW AUTO_REBALANCE ON", () => {
+      const r = parseCommand("DW AUTO_REBALANCE ON");
+      expect(r).toEqual({ ok: true, value: { type: "AUTO_REBALANCE", enabled: true } });
+    });
+    it("parses DW AUTO_REBALANCE OFF", () => {
+      const r = parseCommand("DW AUTO_REBALANCE OFF");
+      expect(r).toEqual({ ok: true, value: { type: "AUTO_REBALANCE", enabled: false } });
+    });
+    it("rejects invalid toggle", () => {
+      const r = parseCommand("DW AUTO_REBALANCE MAYBE");
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // EDGE CASES
+  // ============================================================
+  describe("edge cases", () => {
+    it("rejects empty string", () => {
+      expect(parseCommand("").ok).toBe(false);
+    });
+    it("rejects random text", () => {
+      expect(parseCommand("hello world").ok).toBe(false);
+    });
+    it("rejects DW alone", () => {
+      expect(parseCommand("DW").ok).toBe(false);
+    });
+    it("rejects unknown op", () => {
+      const r = parseCommand("DW FOOBAR");
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain("Unknown command");
+    });
+    it("handles extra whitespace", () => {
+      const r = parseCommand("  DW   STATUS  ");
+      expect(r).toEqual({ ok: true, value: { type: "STATUS" } });
+    });
+  });
+});
+
+describe("tryAutoDetect — natural language shortcuts", () => {
+  it("auto-detects 'send 10 USDC to <addr>'", () => {
+    const r = tryAutoDetect(`send 10 USDC to ${ADDR1}`);
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "PAYOUT") {
+      expect(r.value.amountUsdc).toBe(10);
+    }
+  });
+  it("auto-detects 'pay 5 USDC to <addr>'", () => {
+    const r = tryAutoDetect(`pay 5 USDC to ${ADDR1}`);
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'transfer 100 USDC to <addr>'", () => {
+    const r = tryAutoDetect(`transfer 100 USDC to ${ADDR1}`);
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'buy 50 SUI at 1.02'", () => {
+    const r = tryAutoDetect("buy 50 SUI at 1.02");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "LIMIT_BUY") {
+      expect(r.value.qty).toBe(50);
+      expect(r.value.price).toBe(1.02);
+    }
+  });
+  it("auto-detects 'sell 10 SUI @ 2.5'", () => {
+    const r = tryAutoDetect("sell 10 SUI @ 2.5");
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'bridge 100 USDC from arc to sui'", () => {
+    const r = tryAutoDetect("bridge 100 USDC from arc to sui");
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'deposit 10 SUI'", () => {
+    const r = tryAutoDetect("deposit 10 SUI");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "DEPOSIT") {
+      expect(r.value.coinType).toBe("SUI");
+      expect(r.value.amount).toBe(10);
+    }
+  });
+  it("auto-detects 'withdraw 5 USDC'", () => {
+    const r = tryAutoDetect("withdraw 5 USDC");
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'market buy 10 SUI'", () => {
+    const r = tryAutoDetect("market buy 10 SUI");
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'market sell 5 SUI'", () => {
+    const r = tryAutoDetect("market sell 5 SUI");
+    expect(r?.ok).toBe(true);
+  });
+  it("auto-detects 'setup' and '/setup'", () => {
+    expect(tryAutoDetect("setup")?.ok).toBe(true);
+    expect(tryAutoDetect("/setup")?.ok).toBe(true);
+  });
+  it("auto-detects 'settle'", () => {
+    expect(tryAutoDetect("settle")?.ok).toBe(true);
+  });
+  it("auto-detects 'status'", () => {
+    expect(tryAutoDetect("status")?.ok).toBe(true);
+  });
+  it("auto-detects 'cancel order123'", () => {
+    const r = tryAutoDetect("cancel order123");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "CANCEL") {
+      expect(r.value.orderId).toBe("order123");
+    }
+  });
+  it("auto-detects 'cancel schedule sched_123'", () => {
+    const r = tryAutoDetect("cancel schedule sched_123");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "CANCEL_SCHEDULE") {
+      expect(r.value.scheduleId).toBe("sched_123");
+    }
+  });
+  it("auto-detects WalletConnect URI", () => {
+    const r = tryAutoDetect("wc:abc123@2?relay-protocol=irn&symKey=xyz");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "CONNECT") {
+      expect(r.value.wcUri).toContain("wc:");
+    }
+  });
+  it("returns null for unknown text", () => {
+    expect(tryAutoDetect("hello world")).toBe(null);
+  });
+  it("returns null for empty string", () => {
+    expect(tryAutoDetect("")).toBe(null);
+  });
+});

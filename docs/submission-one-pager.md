@@ -41,7 +41,10 @@ Built for HackMoney 2026. Tech: Node.js, Google Docs/Drive API, viem, @mysten/su
 
 ---
 
-## Demo video checklist (reminder)
+## Demo video checklist — all 3 tracks mandatory
 - 2–4 minutes, 720p+, you speaking (no TTS)
-- Show: Doc → `DW /setup` → Join + QUORUM 2 → Arc payout (approve → result) → Sui limit order → Audit Log
-- Optionally: Yellow session or ENS policy blocking a command
+- **Arc:** Doc → `DW /setup` → Join + QUORUM 2 → `DW PAYOUT` (approve → result) → Audit Log
+- **Yellow:** `DW SESSION_CREATE` → approve → show Sessions table + Config `APPROVALS_TOTAL` / `EST_APPROVAL_TX_AVOIDED`; say "gasless via Yellow NitroRPC"
+- **Sui:** `DW LIMIT_BUY SUI 5 USDC @ 1.02` → approve → Open Orders table
+- End with Audit Log: "Arc, Yellow, Sui — all logged here"
+- Optional: ENS policy block (`REJECTED_POLICY`), Chat `!execute`

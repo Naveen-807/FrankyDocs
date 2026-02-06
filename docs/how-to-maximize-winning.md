@@ -4,6 +4,18 @@ Actionable checklist to maximize partner prizes and finalist chances.
 
 ---
 
+## Features & wow factor — quick check
+
+**Features:** Strong. You have multi-chain execution (Arc, Sui, Yellow), full command set, ENS policy, quorum approvals, agent decisions, and audit in-doc. Enough for Technicality, Originality, and Practicality.
+
+**WOW factor:** It’s there — but only if you **show** it. The wow is: (1) “This Google Doc is the wallet — no dApp, no extension,” (2) multi-chain from one table, (3) full audit trail in the same doc. In the video, open the doc first and say the one-line pitch; then show one complete flow (type → approve → executed → Audit Log). Don’t bury the concept in setup.
+
+**One line that lands:** *“Anyone who can edit a Google Doc can run a multi-sig treasury and place limit orders on Sui — no wallet install.”*
+
+---
+
+**Winning all 3 tracks (Arc, Sui, Yellow):** Yellow is not optional. In the demo show `DW SESSION_CREATE`, Sessions table, and gasless metrics; say "Yellow NitroRPC" and "delegated session keys." Use `docs/demo-script.md` for the all-3-tracks flow.
+
 ## 1. Eligibility (do this first)
 
 - [ ] **Confirm timeline:** All work must start after the hackathon start date. If you built FrankyDocs before that, you **cannot** win partner prizes or Finalist. Check with ETHGlobal if you have a “HackMoney 2026 extension” (e.g. new integrations or features) that qualifies.
@@ -33,9 +45,9 @@ Judges and partners see this first. Follow ETHGlobal rules exactly.
 | 1:10–1:50 | **Arc:** `DW PAYOUT` or `DW PAYOUT_SPLIT` → Approval URL → quorum → result + Audit Log | **Arc track** — agent + Circle/USDC |
 | 1:50–2:20 | **Sui:** `DW LIMIT_BUY SUI 5 USDC @ 1.02` → approve → Open Orders table | **Sui/DeepBook track** — CLOB from a doc |
 | 2:20–2:50 | Audit Log + Recent Activity (+ optional agent alert) | **Practicality** — full audit trail |
-| 2:50–3:30 | Optional: Yellow `SESSION_CREATE` or Chat `!execute` or auto-proposal | **Yellow / originality** if time |
+| 2:50–3:30 | **Yellow (mandatory):** `DW SESSION_CREATE` → Sessions table + `APPROVALS_TOTAL` / `EST_APPROVAL_TX_AVOIDED` | **Yellow track** |
 
-### Pro tips
+### Pro tips (all 3 tracks)
 - Rehearse once with a timer; cut anything that doesn’t show sponsor tech.
 - One sentence per sponsor: “We use **Arc** for USDC payouts and Circle wallets,” “We use **Sui DeepBook** for limit orders,” “We use **Yellow** for gasless approvals.”
 - If you have a policy: show one command **blocked** by ENS policy (e.g. over limit) → `REJECTED_POLICY` in the table. Strong for “governance” narrative.
@@ -67,7 +79,7 @@ You can select **up to 3 partner prizes**. For each partner you select:
 
 ## 5. Finalist prep (if you get to live judging)
 
-- [ ] **4 min demo:** Same as video but live — Doc → setup → quorum → Arc payout → Sui limit order → Audit Log. No dead time.
+- [ ] **4 min demo:** Same as video but live — Doc → setup → quorum → **Arc** payout → **Yellow** SESSION_CREATE + gasless metrics → **Sui** limit order → Audit Log. All 3 tracks. No dead time.
 - [ ] **3 min Q&A — prepare answers for:**
   - “What inspired this?” → “Teams don’t use DeFi because of wallet UX; we wanted treasury in a place teams already use: a shared Doc.”
   - “Why Google Docs?” → “No install, familiar to 3B users, built-in audit trail and collaboration.”
@@ -82,7 +94,7 @@ You can select **up to 3 partner prizes**. For each partner you select:
 | Action | Impact |
 |--------|--------|
 | Add 1–2 sentences to README: “Built for HackMoney 2026” + sponsor names | Partner visibility |
-| Ensure `APPROVALS_TOTAL` and `EST_APPROVAL_TX_AVOIDED` are visible in Config in the demo | Yellow / gasless story |
+| **Mandatory:** Show Yellow `SESSION_CREATE`, Sessions table, and `APPROVALS_TOTAL` / `EST_APPROVAL_TX_AVOIDED` in Config | Yellow track — gasless story |
 | If you have an ENS name: set `docwallet.policy` and show a blocked command in the video | Governance / originality |
 | Record video at 1080p, quiet room, clear mic | Usability / professionalism |
 | In submission, name all three sponsors (Arc, Sui, Yellow) in the short description | Partner prize eligibility |
@@ -99,4 +111,4 @@ You can select **up to 3 partner prizes**. For each partner you select:
 
 ---
 
-**Summary:** Maximize winning by (1) confirming eligibility, (2) nailing a 2–4 min video that shows Doc → Arc payout → Sui trade → audit, (3) writing explicit “how we used your stack” for each of your 3 partners, (4) making the repo one-command run and judge-friendly, and (5) preparing a tight live demo and Q&A for finalist judging.
+**Summary:** Maximize winning by (1) confirming eligibility, (2) demo showing **Arc** (payout), **Yellow** (SESSION_CREATE + gasless metrics), and **Sui** (limit order), (3) writing explicit “how we used your stack” for each of your 3 partners, (4) making the repo one-command run and judge-friendly, and (5) preparing a tight live demo and Q&A for finalist judging.

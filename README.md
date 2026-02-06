@@ -49,6 +49,8 @@ flowchart TB
 - `docs/commands.md`
 - `docs/execution-plan.md`
 - `docs/demo-script.md`
+- `docs/architecture.md` — architecture diagram (for Arc bounty submission)
+- `docs/arc-bounty-checklist.md` — Arc bounty fit and submission text
 - `docs/how-to-maximize-winning.md` — HackMoney 2026 checklist
 - `docs/submission-one-pager.md` — copy-paste for submission form
 
