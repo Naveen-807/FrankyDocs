@@ -497,6 +497,15 @@ export class Engine {
           }
         }
 
+        // --- Yellow state channel balance ---
+        const yellowSession = repo.getYellowSession(docId);
+        if (yellowSession && yellowSession.status === "OPEN") {
+          const allocs: YellowAllocation[] = JSON.parse(yellowSession.allocations_json || "[]");
+          const yellowTotal = allocs.reduce((sum, a) => sum + parseFloat(a.amount || "0"), 0);
+          const yellowAssetLabel = (config.YELLOW_ASSET ?? "ytest.usd").toUpperCase();
+          balanceEntries.push({ location: "Yellow", asset: yellowAssetLabel, balance: yellowTotal.toFixed(2) });
+        }
+
         // --- Portfolio Valuation (USD value using live prices) ---
         const cachedPrice = repo.getPrice("SUI/USDC");
         if (cachedPrice && cachedPrice.mid_price > 0) {
@@ -508,7 +517,7 @@ export class Engine {
             if (entry.asset === "SUI") {
               const usd = bal * cachedPrice.mid_price;
               totalUsdValue += usd;
-            } else if (entry.asset === "USDC" || entry.asset === "DBUSDC") {
+            } else if (entry.asset === "USDC" || entry.asset === "DBUSDC" || entry.asset === "YTEST.USD") {
               totalUsdValue += bal;
             } else if (entry.asset === "Native") {
               // Arc native (ETH-equivalent) — approximate as 0 for now
@@ -1459,6 +1468,223 @@ export class Engine {
       };
     }
 
+    // --- TREASURY: Unified cross-chain balance view ---
+    if (command.type === "TREASURY") {
+      const lines: string[] = [];
+      let totalUsd = 0;
+      const cachedPrice = repo.getPrice("SUI/USDC");
+      const suiPrice = cachedPrice?.mid_price ?? 0;
+
+      // Sui chain
+      if (deepbook) {
+        try {
+          const suiBals = await deepbook.getWalletBalances({ address: secrets.sui.address });
+          const suiVal = Number(suiBals.suiBalance);
+          const dbUsdc = Number(suiBals.dbUsdcBalance);
+          const suiUsd = suiVal * suiPrice;
+          totalUsd += suiUsd + dbUsdc;
+          lines.push(`SUI_CHAIN: ${suiBals.suiBalance} SUI ($${suiUsd.toFixed(2)}) + ${suiBals.dbUsdcBalance} DBUSDC`);
+        } catch { lines.push("SUI_CHAIN: err"); }
+      } else {
+        lines.push("SUI_CHAIN: disabled");
+      }
+
+      // Arc chain (Circle wallet + direct EVM)
+      let arcUsdc = 0;
+      if (circle) {
+        const circleW = repo.getCircleWallet(docId);
+        if (circleW) {
+          try {
+            const bal = await circle.getWalletBalance(circleW.wallet_id);
+            arcUsdc = Number(bal?.usdcBalance ?? 0);
+            lines.push(`ARC_CIRCLE: $${arcUsdc.toFixed(2)} USDC (wallet=${circleW.wallet_address.slice(0, 10)}...)`);
+          } catch { lines.push("ARC_CIRCLE: err"); }
+        }
+      }
+      if (arc) {
+        try {
+          const arcBals = await arc.getBalances(secrets.evm.address as `0x${string}`);
+          const directUsdc = Number(arcBals.usdcBalance);
+          if (directUsdc > 0) {
+            lines.push(`ARC_DIRECT: $${directUsdc.toFixed(2)} USDC (evm=${secrets.evm.address.slice(0, 10)}...)`);
+            arcUsdc += directUsdc;
+          }
+        } catch { /* skip */ }
+      }
+      totalUsd += arcUsdc;
+
+      // Yellow state channel
+      const yellowSession = repo.getYellowSession(docId);
+      if (yellowSession && yellowSession.status === "OPEN") {
+        const allocs: YellowAllocation[] = JSON.parse(yellowSession.allocations_json || "[]");
+        const yellowTotal = allocs.reduce((sum, a) => sum + parseFloat(a.amount || "0"), 0);
+        totalUsd += yellowTotal;
+        const allocDetail = allocs.map(a => `${a.participant.slice(0, 8)}..=${a.amount}`).join(", ");
+        const yellowAssetLabel = (config.YELLOW_ASSET ?? "ytest.usd").toUpperCase();
+        lines.push(`YELLOW_CHANNEL: $${yellowTotal.toFixed(2)} ${yellowAssetLabel} [${allocDetail}] (v${yellowSession.version})`);
+      } else {
+        lines.push(`YELLOW_CHANNEL: ${yellowSession ? yellowSession.status : "no session"}`);
+      }
+
+      // Trading P&L
+      const stats = repo.getTradeStats(docId);
+      if (stats.totalBuyUsdc > 0 || stats.totalSellUsdc > 0) {
+        lines.push(`TRADING_PNL: ${stats.netPnl >= 0 ? "+" : ""}$${stats.netPnl.toFixed(2)}`);
+      }
+
+      // Price info
+      if (suiPrice > 0) {
+        lines.push(`SUI_PRICE: $${suiPrice.toFixed(4)}`);
+      }
+
+      lines.push(`TOTAL_TREASURY: $${totalUsd.toFixed(2)} USD`);
+
+      // Chain distribution
+      if (totalUsd > 0) {
+        const suiPct = (((totalUsd - arcUsdc - (yellowSession?.status === "OPEN" ? JSON.parse(yellowSession.allocations_json || "[]").reduce((s: number, a: YellowAllocation) => s + parseFloat(a.amount || "0"), 0) : 0)) / totalUsd) * 100).toFixed(0);
+        const arcPct = ((arcUsdc / totalUsd) * 100).toFixed(0);
+        const yellowAmt = yellowSession?.status === "OPEN" ? JSON.parse(yellowSession.allocations_json || "[]").reduce((s: number, a: YellowAllocation) => s + parseFloat(a.amount || "0"), 0) : 0;
+        const yellowPct = ((yellowAmt / totalUsd) * 100).toFixed(0);
+        lines.push(`DISTRIBUTION: Sui=${suiPct}% Arc=${arcPct}% Yellow=${yellowPct}%`);
+      }
+
+      return { resultText: lines.join(" | ") };
+    }
+
+    // --- REBALANCE: Cross-chain capital movement ---
+    if (command.type === "REBALANCE") {
+      const { fromChain, toChain, amountUsdc } = command;
+      const route = `${fromChain}→${toChain}`;
+      const results: string[] = [`REBALANCE $${amountUsdc} ${route}`];
+
+      // Arc → Sui: Use Circle CCTP bridge
+      if (fromChain === "arc" && toChain === "sui") {
+        if (!circle) throw new Error("REBALANCE arc→sui requires Circle (CIRCLE_ENABLED=1)");
+        const w = repo.getCircleWallet(docId);
+        if (!w) throw new Error("Missing Circle wallet. Run DW /setup first.");
+        const bridgeResult = await circle.bridgeUsdc({
+          walletId: w.wallet_id,
+          walletAddress: w.wallet_address as `0x${string}`,
+          destinationAddress: secrets.sui.address,
+          amountUsdc,
+          sourceChain: "arc",
+          destinationChain: "sui"
+        });
+        results.push(`CCTP_BRIDGE CircleTx=${bridgeResult.circleTxId} Route=${bridgeResult.route}`);
+        if (bridgeResult.txHash) results.push(`BridgeTx=${bridgeResult.txHash}`);
+        return { arcTxHash: bridgeResult.txHash as any, resultText: results.join(" | ") };
+      }
+
+      // Sui → Arc: Use Circle CCTP bridge (reverse direction)
+      if (fromChain === "sui" && toChain === "arc") {
+        if (!circle) throw new Error("REBALANCE sui→arc requires Circle (CIRCLE_ENABLED=1)");
+        const w = repo.getCircleWallet(docId);
+        if (!w) throw new Error("Missing Circle wallet. Run DW /setup first.");
+        const bridgeResult = await circle.bridgeUsdc({
+          walletId: w.wallet_id,
+          walletAddress: w.wallet_address as `0x${string}`,
+          destinationAddress: secrets.evm.address,
+          amountUsdc,
+          sourceChain: "sui",
+          destinationChain: "arc"
+        });
+        results.push(`CCTP_BRIDGE CircleTx=${bridgeResult.circleTxId} Route=${bridgeResult.route}`);
+        if (bridgeResult.txHash) results.push(`BridgeTx=${bridgeResult.txHash}`);
+        return { arcTxHash: bridgeResult.txHash as any, resultText: results.join(" | ") };
+      }
+
+      // Arc → Yellow: Transfer USDC from Arc to Yellow state channel (fund channel)
+      if (fromChain === "arc" && toChain === "yellow") {
+        if (!yellow) throw new Error("REBALANCE arc→yellow requires Yellow (YELLOW_ENABLED=1)");
+        const session = repo.getYellowSession(docId);
+        if (!session || session.status !== "OPEN") throw new Error("No open Yellow session. Run DW SESSION_CREATE first.");
+
+        // Update Yellow allocations: increase our allocation by the funded amount
+        const currentAllocations: YellowAllocation[] = JSON.parse(session.allocations_json || "[]");
+        const yellowAsset = config.YELLOW_ASSET ?? "ytest.usd";
+        const ourAddr = secrets.evm.address.toLowerCase();
+        const ourIdx = currentAllocations.findIndex(a => a.participant.toLowerCase() === ourAddr);
+        const newAllocations = currentAllocations.map(a => ({ ...a }));
+        if (ourIdx >= 0) {
+          newAllocations[ourIdx]!.amount = (parseFloat(newAllocations[ourIdx]!.amount) + amountUsdc).toFixed(6);
+        } else {
+          newAllocations.push({ participant: secrets.evm.address, asset: yellowAsset, amount: amountUsdc.toFixed(6) });
+        }
+
+        // Get signing keys
+        const signers = repo.listSigners(docId);
+        const signerPrivateKeysHex = signers
+          .map(s => repo.getYellowSessionKey({ docId, signerAddress: s.address }))
+          .filter(k => k)
+          .map(k => {
+            const plain = decryptWithMasterKey({ masterKey: config.DOCWALLET_MASTER_KEY, blob: k!.encrypted_session_key_private });
+            return (JSON.parse(plain.toString("utf8")) as { privateKeyHex: `0x${string}` }).privateKeyHex;
+          });
+
+        const newVersion = session.version + 1;
+        await yellow.submitAppState({
+          signerPrivateKeysHex,
+          appSessionId: session.app_session_id,
+          version: newVersion,
+          intent: `rebalance_arc_yellow_${amountUsdc}`,
+          sessionData: `REBALANCE:arc→yellow:${amountUsdc}`,
+          allocations: newAllocations
+        });
+        repo.setYellowSessionVersion({ docId, version: newVersion, allocationsJson: JSON.stringify(newAllocations) });
+        results.push(`YELLOW_FUNDED +${amountUsdc} ${yellowAsset.toUpperCase()} v${newVersion}`);
+        return { resultText: results.join(" | ") };
+      }
+
+      // Yellow → Arc: Withdraw from Yellow channel back to Arc
+      if (fromChain === "yellow" && toChain === "arc") {
+        if (!yellow) throw new Error("REBALANCE yellow→arc requires Yellow (YELLOW_ENABLED=1)");
+        const session = repo.getYellowSession(docId);
+        if (!session || session.status !== "OPEN") throw new Error("No open Yellow session.");
+
+        const currentAllocations: YellowAllocation[] = JSON.parse(session.allocations_json || "[]");
+        const ourAddr = secrets.evm.address.toLowerCase();
+        const ourIdx = currentAllocations.findIndex(a => a.participant.toLowerCase() === ourAddr);
+        if (ourIdx < 0 || parseFloat(currentAllocations[ourIdx]!.amount) < amountUsdc) {
+          throw new Error(`Insufficient Yellow balance. Have=${ourIdx >= 0 ? currentAllocations[ourIdx]!.amount : "0"}`);
+        }
+
+        const newAllocations = currentAllocations.map(a => ({ ...a }));
+        newAllocations[ourIdx]!.amount = (parseFloat(newAllocations[ourIdx]!.amount) - amountUsdc).toFixed(6);
+
+        const signers = repo.listSigners(docId);
+        const signerPrivateKeysHex = signers
+          .map(s => repo.getYellowSessionKey({ docId, signerAddress: s.address }))
+          .filter(k => k)
+          .map(k => {
+            const plain = decryptWithMasterKey({ masterKey: config.DOCWALLET_MASTER_KEY, blob: k!.encrypted_session_key_private });
+            return (JSON.parse(plain.toString("utf8")) as { privateKeyHex: `0x${string}` }).privateKeyHex;
+          });
+
+        const newVersion = session.version + 1;
+        await yellow.submitAppState({
+          signerPrivateKeysHex,
+          appSessionId: session.app_session_id,
+          version: newVersion,
+          intent: `rebalance_yellow_arc_${amountUsdc}`,
+          sessionData: `REBALANCE:yellow→arc:${amountUsdc}`,
+          allocations: newAllocations
+        });
+        repo.setYellowSessionVersion({ docId, version: newVersion, allocationsJson: JSON.stringify(newAllocations) });
+        results.push(`YELLOW_WITHDRAWN -${amountUsdc} ${(config.YELLOW_ASSET ?? "ytest.usd").toUpperCase()} v${newVersion}`);
+        return { resultText: results.join(" | ") };
+      }
+
+      // Sui → Yellow or Yellow → Sui: Route through Arc as intermediate
+      if ((fromChain === "sui" && toChain === "yellow") || (fromChain === "yellow" && toChain === "sui")) {
+        results.push(`ROUTE: ${route} requires intermediate hop via Arc`);
+        results.push(`Step 1: DW REBALANCE ${amountUsdc} FROM ${fromChain} TO arc`);
+        results.push(`Step 2: DW REBALANCE ${amountUsdc} FROM arc TO ${toChain}`);
+        return { resultText: results.join(" | ") };
+      }
+
+      return { resultText: `REBALANCE: unsupported route ${route}` };
+    }
+
     if (command.type === "SWEEP_YIELD") {
       // Sweep settled DeepBook amounts + consolidate idle capital
       const results: string[] = [];
@@ -1520,6 +1746,16 @@ export class Engine {
       const totalIdle = circleIdle;
       if (totalIdle > 0) {
         results.push(`CROSS_CHAIN_IDLE=$${totalIdle.toFixed(2)}`);
+      }
+
+      // Yellow channel balance
+      const sweepYellowSession = repo.getYellowSession(docId);
+      if (sweepYellowSession && sweepYellowSession.status === "OPEN") {
+        const allocs: YellowAllocation[] = JSON.parse(sweepYellowSession.allocations_json || "[]");
+        const yellowTotal = allocs.reduce((sum, a) => sum + parseFloat(a.amount || "0"), 0);
+        if (yellowTotal > 0) {
+          results.push(`YELLOW_CHANNEL=$${yellowTotal.toFixed(2)} ${(config.YELLOW_ASSET ?? "ytest.usd").toUpperCase()}`);
+        }
       }
 
       // Get current P&L
@@ -1783,7 +2019,7 @@ export class Engine {
           }
         }
 
-        // 7. Cross-chain portfolio balance detection (Arc <-> Sui)
+        // 7. Cross-chain portfolio balance detection (Arc <-> Sui <-> Yellow)
         if (arc && deepbook && doc.evm_address && doc.sui_address) {
           try {
             const arcBals = await arc.getBalances(doc.evm_address as `0x${string}`);
@@ -1791,11 +2027,21 @@ export class Engine {
             const suiBals = await deepbook.getWalletBalances({ address: doc.sui_address });
             const suiVal = Number(suiBals.suiBalance) * (cachedPrice?.mid_price ?? 0);
             const suiUsdc = Number(suiBals.dbUsdcBalance);
-            const totalPortfolio = arcUsdc + suiVal + suiUsdc;
+
+            // Include Yellow channel balance
+            let yellowVal = 0;
+            const agentYellowSession = repo.getYellowSession(docId);
+            if (agentYellowSession && agentYellowSession.status === "OPEN") {
+              const allocs: YellowAllocation[] = JSON.parse(agentYellowSession.allocations_json || "[]");
+              yellowVal = allocs.reduce((sum, a) => sum + parseFloat(a.amount || "0"), 0);
+            }
+
+            const totalPortfolio = arcUsdc + suiVal + suiUsdc + yellowVal;
             if (totalPortfolio > 0) {
               const arcPct = ((arcUsdc / totalPortfolio) * 100).toFixed(0);
               const suiPct = (((suiVal + suiUsdc) / totalPortfolio) * 100).toFixed(0);
-              decisions.push(`🌐 Portfolio: Arc=${arcPct}% Sui=${suiPct}% (Total=$${totalPortfolio.toFixed(2)})`);
+              const yellowPct = ((yellowVal / totalPortfolio) * 100).toFixed(0);
+              decisions.push(`🌐 Treasury: Arc=${arcPct}% Sui=${suiPct}% Yellow=${yellowPct}% (Total=$${totalPortfolio.toFixed(2)})`);
             }
           } catch { /* ignore cross-chain balance check failure */ }
         }
@@ -1908,6 +2154,37 @@ export class Engine {
               }
             } catch { /* ignore */ }
           }
+
+          // Auto-propose REBALANCE when one chain holds >80% of treasury
+          if (autoRebalance === "1" && arc && deepbook && doc.evm_address && doc.sui_address && cachedPrice && cachedPrice.mid_price > 0) {
+            try {
+              const arcBals = await arc.getBalances(doc.evm_address as `0x${string}`);
+              const propArcUsdc = Number(arcBals.usdcBalance);
+              const propSuiBals = await deepbook.getWalletBalances({ address: doc.sui_address });
+              const propSuiVal = Number(propSuiBals.suiBalance) * cachedPrice.mid_price;
+              const propSuiUsdc = Number(propSuiBals.dbUsdcBalance);
+              const propTotal = propArcUsdc + propSuiVal + propSuiUsdc;
+              if (propTotal > 100) {
+                const arcPctNum = (propArcUsdc / propTotal) * 100;
+                const suiPctNum = ((propSuiVal + propSuiUsdc) / propTotal) * 100;
+                if (arcPctNum > 80 && propArcUsdc > 50) {
+                  const moveAmt = Math.floor(propArcUsdc * 0.3);
+                  await propose(
+                    `DW REBALANCE ${moveAmt} FROM arc TO sui`,
+                    `Arc has ${arcPctNum.toFixed(0)}% of treasury — diversify to Sui`,
+                    "proposal_rebalance_last_ms"
+                  );
+                } else if (suiPctNum > 80 && propSuiUsdc > 50) {
+                  const moveAmt = Math.floor(propSuiUsdc * 0.3);
+                  await propose(
+                    `DW REBALANCE ${moveAmt} FROM sui TO arc`,
+                    `Sui has ${suiPctNum.toFixed(0)}% of treasury — diversify to Arc`,
+                    "proposal_rebalance_last_ms"
+                  );
+                }
+              }
+            } catch { /* ignore */ }
+          }
         }
 
         // Log decision summary
@@ -1991,6 +2268,8 @@ function reconstructDwCommand(cmd: ParsedCommand): string | null {
     case "TRADE_HISTORY": return "DW TRADE_HISTORY";
     case "PRICE": return "DW PRICE";
     case "CANCEL_ORDER": return `DW CANCEL_ORDER ${cmd.orderId}`;
+    case "TREASURY": return "DW TREASURY";
+    case "REBALANCE": return `DW REBALANCE ${cmd.amountUsdc} FROM ${cmd.fromChain} TO ${cmd.toChain}`;
     default: return null;
   }
 }
@@ -2152,6 +2431,14 @@ export function suggestCommandFromChat(input: string, context?: { repo: Repo; do
   // Sweep yield
   if (lower.match(/^(?:sweep|collect|harvest)/)) return "Use: DW SWEEP_YIELD";
 
+  // Treasury / unified balance
+  if (lower.match(/^(?:treasury|unified|total\s+balance|all\s+balance)/)) return "Use: DW TREASURY";
+
+  // Rebalance
+  const rebalChatMatch = lower.match(/rebalance\s+([\d.]+)\s*(?:usdc\s+)?(?:from\s+)?(\w+)\s+(?:to\s+)?(\w+)/i);
+  if (rebalChatMatch) return `Use: DW REBALANCE ${rebalChatMatch[1]} FROM ${rebalChatMatch[2]} TO ${rebalChatMatch[3]}`;
+  if (lower.match(/^rebalance/)) return "Syntax: DW REBALANCE <amount> FROM <arc|sui|yellow> TO <arc|sui|yellow>";
+
   // Cancel conditional order
   const cancelOrdMatch = lower.match(/cancel\s+(?:order\s+|stop.?loss\s+|take.?profit\s+)?((?:sl|tp|ord)_\w+)/);
   if (cancelOrdMatch) return `Use: DW CANCEL_ORDER ${cancelOrdMatch[1]}`;
@@ -2220,6 +2507,8 @@ export function suggestCommandFromChat(input: string, context?: { repo: Repo; do
       "• DW SESSION_CLOSE — Close Yellow session",
       "• DW SESSION_STATUS — Yellow session info",
       "• DW YELLOW_SEND <amt> USDC TO <addr> — Off-chain instant transfer (gasless)",
+      "• DW TREASURY — Unified cross-chain balance (Sui + Arc + Yellow)",
+      "• DW REBALANCE <amt> FROM <chain> TO <chain> — Move capital between chains",
       "• DW ALERT <coin> BELOW <amount> (alias: ALERT_THRESHOLD)",
       "• DW AUTO_REBALANCE ON|OFF",
       "• DW POLICY ENS <name.eth>",
@@ -2228,5 +2517,5 @@ export function suggestCommandFromChat(input: string, context?: { repo: Repo; do
     ].join("\n");
   }
 
-  return "I can help! Try: 'buy 10 SUI at 1.5', 'send 50 USDC to 0x...', 'bridge 100 USDC from arc to sui', 'stop loss 50 SUI at 0.80', 'take profit 50 SUI at 2.50', 'price', 'pnl', 'sweep', or type 'help'.";
+  return "I can help! Try: 'buy 10 SUI at 1.5', 'send 50 USDC to 0x...', 'bridge 100 USDC from arc to sui', 'stop loss 50 SUI at 0.80', 'take profit 50 SUI at 2.50', 'treasury', 'rebalance 50 from arc to sui', 'price', 'pnl', 'sweep', or type 'help'.";
 }

@@ -112,6 +112,36 @@ export function startServer(deps: ServerDeps) {
   </div>
 </div>
 
+<div class="card" style="margin-bottom:20px;border:2px solid #e2e8f0;background:linear-gradient(135deg,#f8fafc 0%,#f1f5f9 100%)">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+    <span style="font-size:1.3rem">💰</span>
+    <div style="font-weight:700;font-size:1.05rem;color:var(--gray-900)">Unified Treasury Flow</div>
+    <span class="badge badge-blue" style="margin-left:auto">3 Chains · 1 Treasury</span>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:8px;align-items:center;text-align:center;font-size:.82rem">
+    <div style="background:#FFF8E1;border-radius:10px;padding:10px 8px;border:1px solid #FFD700">
+      <div style="font-weight:700;color:#B8860B">Yellow</div>
+      <div style="color:#666;margin-top:2px">ytest.usd</div>
+      <div style="font-size:.7rem;color:#999;margin-top:2px">Off-chain · Gasless</div>
+    </div>
+    <div style="font-size:1.2rem;color:#94a3b8">⇄</div>
+    <div style="background:#EFF6FF;border-radius:10px;padding:10px 8px;border:1px solid #0052FF">
+      <div style="font-weight:700;color:#0052FF">Arc</div>
+      <div style="color:#666;margin-top:2px">USDC (ERC-20)</div>
+      <div style="font-size:.7rem;color:#999;margin-top:2px">Circle CCTP · Chain 5042002</div>
+    </div>
+    <div style="font-size:1.2rem;color:#94a3b8">⇄</div>
+    <div style="background:#F0F9FF;border-radius:10px;padding:10px 8px;border:1px solid #6FBCF0">
+      <div style="font-weight:700;color:#2196F3">Sui</div>
+      <div style="color:#666;margin-top:2px">SUI + DBUSDC</div>
+      <div style="font-size:.7rem;color:#999;margin-top:2px">DeepBook V3 · CLOB</div>
+    </div>
+  </div>
+  <div style="text-align:center;margin-top:10px;font-size:.78rem;color:#64748b">
+    <code>DW TREASURY</code> — View all balances&nbsp;&nbsp;|&nbsp;&nbsp;<code>DW REBALANCE &lt;amt&gt; FROM &lt;chain&gt; TO &lt;chain&gt;</code> — Move capital
+  </div>
+</div>
+
 <div class="card" style="margin-bottom:20px;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);color:#fff;border:none">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
     <span style="font-size:1.5rem">🌟</span>

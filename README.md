@@ -19,7 +19,9 @@ Note: the codebase uses the internal name "DocWallet" in env vars, database sche
 - **Arc L1 testnet** (chain ID 5042002) — all treasury operations execute on Arc
 - **Circle Developer-Controlled Wallets SDK v2** — creates wallets, resolves USDC token UUIDs, executes transactions
 - **CCTP Bridge** — `DW BRIDGE 100 USDC FROM arc TO sui` with Circle cross-chain routing
-- **Autonomous agent** — monitors balances, detects idle capital, auto-proposes `SWEEP_YIELD`
+- **Unified Treasury** — `DW TREASURY` shows combined balances across Sui, Arc, and Yellow with USD valuation
+- **Cross-chain Rebalance** — `DW REBALANCE 100 FROM arc TO sui` moves capital between all 3 chains
+- **Autonomous agent** — monitors balances, detects idle capital, auto-proposes `SWEEP_YIELD` and `REBALANCE`
 - **Multi-recipient payouts** — `DW PAYOUT_SPLIT` distributes USDC to multiple addresses in one flow
 
 ### Sui / DeepBook V3 ($10K) — CLOB Trading
@@ -78,6 +80,8 @@ flowchart TB
    - `DW PAYOUT 10 USDC TO 0x...` — sends via Circle developer-controlled wallet
    - `DW BRIDGE 50 USDC FROM arc TO sui` — CCTP cross-chain bridge
    - `DW SWEEP_YIELD` — consolidates idle capital across chains
+   - `DW TREASURY` — unified view across all 3 chains (Sui SUI + Arc USDC + Yellow ytest.usd)
+   - `DW REBALANCE 100 FROM arc TO sui` — move capital between chains (arc ⇄ sui ⇄ yellow)
 7. **Agent features** (autonomous):
    - `DW AUTO_REBALANCE ON` — agent auto-proposes sweeps and protective orders
    - `DW ALERT USDC BELOW 10` — balance threshold monitoring

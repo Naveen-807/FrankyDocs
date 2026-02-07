@@ -546,6 +546,21 @@ describe("parseCommand — every command type", () => {
       const r = parseCommand(`DW YELLOW_SEND 5 ETH TO ${ADDR1}`);
       expect(r.ok).toBe(false);
     });
+    it("accepts ytest.usd as unit (Yellow sandbox token)", () => {
+      const r = parseCommand(`DW YELLOW_SEND 10 ytest.usd TO ${ADDR1}`);
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "YELLOW_SEND") {
+        expect(r.value.amountUsdc).toBe(10);
+        expect(r.value.to).toBe(ADDR1);
+      }
+    });
+    it("accepts USD as unit", () => {
+      const r = parseCommand(`DW YELLOW_SEND 5 USD TO ${ADDR1}`);
+      expect(r.ok).toBe(true);
+      if (r.ok && r.value.type === "YELLOW_SEND") {
+        expect(r.value.amountUsdc).toBe(5);
+      }
+    });
     it("rejects invalid address", () => {
       const r = parseCommand("DW YELLOW_SEND 5 USDC TO 0xinvalid");
       expect(r.ok).toBe(false);
@@ -877,5 +892,91 @@ describe("tryAutoDetect — natural language shortcuts", () => {
     const r = tryAutoDetect("prices");
     expect(r?.ok).toBe(true);
     if (r?.ok) expect(r.value.type).toBe("PRICE");
+  });
+  it("auto-detects 'treasury'", () => {
+    const r = tryAutoDetect("treasury");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("TREASURY");
+  });
+  it("auto-detects 'unified balance'", () => {
+    const r = tryAutoDetect("unified balance");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("TREASURY");
+  });
+  it("auto-detects 'all balances'", () => {
+    const r = tryAutoDetect("all balances");
+    expect(r?.ok).toBe(true);
+    if (r?.ok) expect(r.value.type).toBe("TREASURY");
+  });
+  it("auto-detects 'rebalance 100 USDC from arc to sui'", () => {
+    const r = tryAutoDetect("rebalance 100 USDC from arc to sui");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "REBALANCE") {
+      expect(r.value.amountUsdc).toBe(100);
+      expect(r.value.fromChain).toBe("arc");
+      expect(r.value.toChain).toBe("sui");
+    }
+  });
+  it("auto-detects 'rebalance 50 from yellow to arc'", () => {
+    const r = tryAutoDetect("rebalance 50 from yellow to arc");
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.value.type === "REBALANCE") {
+      expect(r.value.amountUsdc).toBe(50);
+      expect(r.value.fromChain).toBe("yellow");
+      expect(r.value.toChain).toBe("arc");
+    }
+  });
+});
+
+describe("TREASURY", () => {
+  it("parses DW TREASURY", () => {
+    const r = parseCommand("DW TREASURY");
+    expect(r).toEqual({ ok: true, value: { type: "TREASURY" } });
+  });
+});
+
+describe("REBALANCE", () => {
+  it("parses DW REBALANCE 100 FROM arc TO sui", () => {
+    const r = parseCommand("DW REBALANCE 100 FROM arc TO sui");
+    expect(r.ok).toBe(true);
+    if (r.ok && r.value.type === "REBALANCE") {
+      expect(r.value.amountUsdc).toBe(100);
+      expect(r.value.fromChain).toBe("arc");
+      expect(r.value.toChain).toBe("sui");
+    }
+  });
+  it("parses DW REBALANCE 50 FROM yellow TO arc", () => {
+    const r = parseCommand("DW REBALANCE 50 FROM yellow TO arc");
+    expect(r.ok).toBe(true);
+    if (r.ok && r.value.type === "REBALANCE") {
+      expect(r.value.amountUsdc).toBe(50);
+      expect(r.value.fromChain).toBe("yellow");
+      expect(r.value.toChain).toBe("arc");
+    }
+  });
+  it("parses DW REBALANCE 25 FROM sui TO yellow", () => {
+    const r = parseCommand("DW REBALANCE 25 FROM sui TO yellow");
+    expect(r.ok).toBe(true);
+    if (r.ok && r.value.type === "REBALANCE") {
+      expect(r.value.amountUsdc).toBe(25);
+      expect(r.value.fromChain).toBe("sui");
+      expect(r.value.toChain).toBe("yellow");
+    }
+  });
+  it("rejects same source and destination", () => {
+    const r = parseCommand("DW REBALANCE 100 FROM arc TO arc");
+    expect(r.ok).toBe(false);
+  });
+  it("rejects invalid chain", () => {
+    const r = parseCommand("DW REBALANCE 100 FROM ethereum TO sui");
+    expect(r.ok).toBe(false);
+  });
+  it("rejects zero amount", () => {
+    const r = parseCommand("DW REBALANCE 0 FROM arc TO sui");
+    expect(r.ok).toBe(false);
+  });
+  it("rejects missing FROM keyword", () => {
+    const r = parseCommand("DW REBALANCE 100 arc TO sui");
+    expect(r.ok).toBe(false);
   });
 });

@@ -52,4 +52,28 @@ describe("evaluatePolicy", () => {
     const res2 = evaluatePolicy({ maxScheduleIntervalHours: 24 }, cmd);
     expect(res2.ok).toBe(false);
   });
+
+  it("blocks REBALANCE when bridgeAllowed=false", () => {
+    const cmd: ParsedCommand = { type: "REBALANCE", fromChain: "arc", toChain: "sui", amountUsdc: 100 };
+    const res = evaluatePolicy({ bridgeAllowed: false }, cmd);
+    expect(res.ok).toBe(false);
+  });
+
+  it("blocks REBALANCE when chain not in allowedChains", () => {
+    const cmd: ParsedCommand = { type: "REBALANCE", fromChain: "arc", toChain: "yellow", amountUsdc: 50 };
+    const res = evaluatePolicy({ allowedChains: ["arc", "sui"] }, cmd);
+    expect(res.ok).toBe(false);
+  });
+
+  it("enforces maxSingleTxUsdc on REBALANCE", () => {
+    const cmd: ParsedCommand = { type: "REBALANCE", fromChain: "arc", toChain: "sui", amountUsdc: 200 };
+    const res = evaluatePolicy({ maxSingleTxUsdc: 100 }, cmd);
+    expect(res.ok).toBe(false);
+  });
+
+  it("allows REBALANCE within policy limits", () => {
+    const cmd: ParsedCommand = { type: "REBALANCE", fromChain: "arc", toChain: "sui", amountUsdc: 50 };
+    const res = evaluatePolicy({ allowedChains: ["arc", "sui", "yellow"], maxSingleTxUsdc: 100 }, cmd);
+    expect(res.ok).toBe(true);
+  });
 });

@@ -142,6 +142,29 @@ export function evaluatePolicy(
     }
   }
 
+  if (cmd.type === "REBALANCE") {
+    if (policy.bridgeAllowed === false) {
+      return { ok: false, reason: "Blocked by policy (bridgeAllowed=false — REBALANCE uses cross-chain transfers)" };
+    }
+    if (policy.allowedChains) {
+      const chains = policy.allowedChains.map((c) => c.toLowerCase());
+      if (!chains.includes(cmd.fromChain.toLowerCase())) {
+        return { ok: false, reason: `Blocked by policy (allowedChains: ${cmd.fromChain})` };
+      }
+      if (!chains.includes(cmd.toChain.toLowerCase())) {
+        return { ok: false, reason: `Blocked by policy (allowedChains: ${cmd.toChain})` };
+      }
+    }
+    if (policy.maxSingleTxUsdc !== undefined && cmd.amountUsdc > policy.maxSingleTxUsdc) {
+      return { ok: false, reason: `Blocked by policy (maxSingleTxUsdc=${policy.maxSingleTxUsdc})` };
+    }
+    if (policy.dailyLimitUsdc !== undefined && context?.dailySpendUsdc !== undefined) {
+      if (context.dailySpendUsdc + cmd.amountUsdc > policy.dailyLimitUsdc) {
+        return { ok: false, reason: `Blocked by policy (dailyLimitUsdc=${policy.dailyLimitUsdc}, spent=${context.dailySpendUsdc.toFixed(2)})` };
+      }
+    }
+  }
+
   return { ok: true };
 }
 

@@ -45,7 +45,9 @@ export type ParsedCommand =
   | { type: "SWEEP_YIELD" }
   | { type: "TRADE_HISTORY" }
   | { type: "PRICE" }
-  | { type: "CANCEL_ORDER"; orderId: string };
+  | { type: "CANCEL_ORDER"; orderId: string }
+  | { type: "TREASURY" }
+  | { type: "REBALANCE"; fromChain: string; toChain: string; amountUsdc: number };
 
 const HexString = z
   .string()
@@ -184,7 +186,14 @@ export const ParsedCommandSchema: z.ZodType<ParsedCommand, z.ZodTypeDef, unknown
   z.object({ type: z.literal("SWEEP_YIELD") }),
   z.object({ type: z.literal("TRADE_HISTORY") }),
   z.object({ type: z.literal("PRICE") }),
-  z.object({ type: z.literal("CANCEL_ORDER"), orderId: z.string().min(1) })
+  z.object({ type: z.literal("CANCEL_ORDER"), orderId: z.string().min(1) }),
+  z.object({ type: z.literal("TREASURY") }),
+  z.object({
+    type: z.literal("REBALANCE"),
+    fromChain: z.string().min(1),
+    toChain: z.string().min(1),
+    amountUsdc: z.number().positive()
+  })
 ]);
 
 export type ParseResult =
@@ -316,6 +325,17 @@ export function tryAutoDetect(raw: string): ParseResult | null {
   const cancelOrdMatch = trimmed.match(/^cancel\s+(?:order\s+|stop[\s-]?loss\s+|take[\s-]?profit\s+)?((?:ord|sl|tp)_\w+)$/i);
   if (cancelOrdMatch) {
     return parseCommand(`DW CANCEL_ORDER ${cancelOrdMatch[1]}`);
+  }
+
+  // "treasury" / "unified balance" / "total balance"
+  if (lower === "treasury" || lower === "unified balance" || lower === "total balance" || lower === "all balances") {
+    return parseCommand("DW TREASURY");
+  }
+
+  // "rebalance 100 USDC from arc to sui" / "rebalance 50 from yellow to sui"
+  const rebalMatch = trimmed.match(/^rebalance\s+([\d.]+)\s*(?:USDC\s+)?from\s+(\w+)\s+to\s+(\w+)$/i);
+  if (rebalMatch) {
+    return parseCommand(`DW REBALANCE ${rebalMatch[1]} FROM ${rebalMatch[2]} TO ${rebalMatch[3]}`);
   }
 
   return null;
@@ -592,12 +612,13 @@ export function parseCommand(raw: string): ParseResult {
   }
 
   if (op === "YELLOW_SEND") {
-    // DW YELLOW_SEND 5 USDC TO 0x...
+    // DW YELLOW_SEND 5 USDC TO 0x...  (also accepts ytest.usd or any stablecoin label)
     const amountStr = parts[2] ?? "";
     const unit = (parts[3] ?? "").toUpperCase();
     const toKw = (parts[4] ?? "").toUpperCase();
     const to = parts[5] ?? "";
-    if (unit !== "USDC") return { ok: false, error: "YELLOW_SEND only supports USDC" };
+    const acceptableUnits = ["USDC", "YTEST.USD", "USD"];
+    if (!acceptableUnits.includes(unit)) return { ok: false, error: "YELLOW_SEND supports USDC/ytest.usd" };
     if (toKw !== "TO") return { ok: false, error: "YELLOW_SEND expects TO <address>" };
     const amountUsdc = parseNumber(amountStr);
     if (amountUsdc === null || amountUsdc <= 0) return { ok: false, error: "Invalid amount" };
@@ -652,6 +673,28 @@ export function parseCommand(raw: string): ParseResult {
     const orderId = parts[2];
     if (!orderId) return { ok: false, error: "CANCEL_ORDER expects <orderId>" };
     return { ok: true, value: { type: "CANCEL_ORDER", orderId } };
+  }
+
+  if (op === "TREASURY") {
+    return { ok: true, value: { type: "TREASURY" } };
+  }
+
+  if (op === "REBALANCE") {
+    // DW REBALANCE 100 FROM arc TO sui
+    const amountStr = parts[2] ?? "";
+    const fromKw = (parts[3] ?? "").toUpperCase();
+    const fromChain = (parts[4] ?? "").toLowerCase();
+    const toKw = (parts[5] ?? "").toUpperCase();
+    const toChain = (parts[6] ?? "").toLowerCase();
+    if (fromKw !== "FROM") return { ok: false, error: "REBALANCE expects FROM <chain>" };
+    if (toKw !== "TO") return { ok: false, error: "REBALANCE expects TO <chain>" };
+    const amountUsdc = parseNumber(amountStr);
+    if (amountUsdc === null || amountUsdc <= 0) return { ok: false, error: "Invalid rebalance amount" };
+    const validChains = ["arc", "sui", "yellow"];
+    if (!validChains.includes(fromChain)) return { ok: false, error: `Invalid source chain: ${fromChain}. Use: arc, sui, yellow` };
+    if (!validChains.includes(toChain)) return { ok: false, error: `Invalid destination chain: ${toChain}. Use: arc, sui, yellow` };
+    if (fromChain === toChain) return { ok: false, error: "Source and destination chains must differ" };
+    return { ok: true, value: { type: "REBALANCE", fromChain, toChain, amountUsdc } };
   }
 
   return { ok: false, error: `Unknown command: ${op}` };
