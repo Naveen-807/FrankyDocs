@@ -32,9 +32,9 @@ Note: the codebase uses the internal name "DocWallet" in env vars, database sche
 
 ---
 
-## 🌟 Prize Track Alignment
+## 🌟 Track Alignment
 
-### Yellow Network ($15K) — State Channel Integration
+### Yellow Network — State Channel Integration
 - **NitroRPC/0.4 protocol** — real WebSocket + HTTP transport with ECDSA signing (`secp256k1` + `keccak256`)
 - **Delegated session keys** — signers authorize once via EIP-712, then approve commands gaslessly
 - **Off-chain ytest.usd payments** — `DW YELLOW_SEND 5 USDC TO 0x...` redistributes allocations without gas
@@ -44,7 +44,7 @@ Note: the codebase uses the internal name "DocWallet" in env vars, database sche
 - **NitroRPC methods**: `create_app_session`, `submit_app_state`, `submit_off_chain_payment`, `close_app_session`
 - **Quorum multi-sig** — multiple signer signatures in `sig` array for multi-party methods
 
-### Arc + Circle ($10K) — Cross-Chain Treasury
+### Arc + Circle — Cross-Chain Treasury
 - **Arc L1 testnet** (chain ID `5042002`) — all EVM treasury operations execute on Arc
 - **Circle Developer-Controlled Wallets SDK v2** — creates wallets, resolves USDC token UUIDs, executes transactions
 - **CCTP Bridge** — `DW BRIDGE 100 USDC FROM arc TO sui` with Circle cross-chain routing (7-chain mapping)
@@ -55,7 +55,7 @@ Note: the codebase uses the internal name "DocWallet" in env vars, database sche
 - **Circle CCTP chains**: Arc-Testnet, ETH-Sepolia, MATIC-Amoy, AVAX-Fuji, SOL-Devnet, SUI-Testnet
 - **ERC-20 USDC** — 6 decimal precision on Arc (address: `0x3600...`)
 
-### Sui / DeepBook V3 ($10K) — CLOB Trading
+### Sui / DeepBook V3  — CLOB Trading
 - **Official `@mysten/deepbook-v3` SDK** with Programmable Transaction Blocks (PTB)
 - **Full order lifecycle** — limit orders, market orders (IOC), cancel, settle, deposit, withdraw
 - **BalanceManager** — on-chain shared balance for capital-efficient trading
